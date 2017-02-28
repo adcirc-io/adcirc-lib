@@ -1,8 +1,7 @@
 body {
+    overflow: hidden;
     min-width: 600px;
-    max-width: 900px;
     margin: auto;
-    padding-top: 20px;
 }
 canvas {
     width: 100%;
@@ -16,6 +15,17 @@ label {
 div {
     padding: 10px;
 }
+
+h1 {
+    margin: 0;
+}
+
+.content {
+    min-width: 600px;
+    max-width: 900px;
+    margin: auto;
+}
+
 .progress {
     position: relative;
     width: 100%;
