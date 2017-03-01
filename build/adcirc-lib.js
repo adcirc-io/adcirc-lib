@@ -767,17 +767,11 @@ function build_fortnd_worker () {
             var start = timestep_map[ timestep ];
             var end = timestep_index == num_datasets - 1 ? file_size : timestep_map[ timesteps[ timestep_index + 1 ] ];
 
-            var bytes = end - start;
-            console.log( bytes + ' bytes' );
-
-            var t0 = performance.now();
             reader.read_block(
                 start,
                 end,
                 function ( data ) {
-                    var t1 = performance.now();
-                    var length = data.length;
-                    console.log( 'Read ' + length + ' bytes in ' + ( t1 - t0 ) + ' milliseconds' );
+                    post_timestep( timestep_index, parse_timestep( data ) );
                 }
             );
 
@@ -923,9 +917,61 @@ function build_fortnd_worker () {
 
     }
 
+    function parse_timestep ( data ) {
+
+        var regex_line = /.*\r?\n/g;
+        var regex_nonwhite = /\S+/g;
+        var ts = { array: new Float32Array( n_dims * num_nodes ) };
+        var match, dat;
+        var line = 0;
+
+        while ( ( match = regex_line.exec( data ) ) !== null ) {
+
+            if ( line == 0 ) {
+
+                dat = match[0].match( regex_nonwhite );
+                ts.model_time = parseFloat( dat[0] );
+                ts.timestep = parseInt( dat[1] );
+
+                line += 1;
+
+            } else {
+
+                dat = match[0].match( regex_nonwhite );
+
+                for ( var i=0; i<n_dims; ++i ) {
+                    ts.array[ line++ - 1 ] = parseFloat( dat[ 1 ] );
+                }
+
+
+            }
+
+        }
+
+        return ts;
+
+    }
+
     function on_error ( error ) {
 
         post_error( error );
+
+    }
+
+    function post_timestep ( index, timestep ) {
+
+        var message = {
+            type: 'timestep',
+            model_time: timestep.model_time,
+            timestep: timestep.timestep,
+            timestep_index: index,
+            array: timestep.array.buffer
+        };
+
+        self.postMessage(
+            message,
+            [ message.array ]
+        );
 
     }
 
@@ -974,9 +1020,13 @@ function fortnd ( n_dims ) {
     var _worker = fortnd_worker();
     var _fortndworker = function () {};
 
-    var _on_start;
-    var _on_progress;
-    var _on_finish;
+    var _on_start = [];
+    var _on_progress = [];
+    var _on_finish = [];
+
+    var _on_start_persist = [];
+    var _on_progress_persist = [];
+    var _on_finish_persist = [];
 
     var _timestep_callbacks = {};
 
@@ -991,19 +1041,28 @@ function fortnd ( n_dims ) {
 
     _fortndworker.on_finish = function ( _ ) {
         if ( !arguments.length ) return _on_finish;
-        if ( typeof _ == 'function' ) _on_finish = _;
+        if ( typeof arguments[0] === 'function' ) {
+            if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
     _fortndworker.on_progress = function ( _ ) {
         if ( !arguments.length ) return _on_progress;
-        if ( typeof _ == 'function' ) _on_progress = _;
+        if ( typeof arguments[0] == 'function' ) {
+            if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
     _fortndworker.on_start = function ( _ ) {
         if ( !arguments.length ) return _on_start;
-        if ( typeof _ == 'function' ) _on_start = _;
+        if ( typeof arguments[0] == 'function' ) {
+            if ( arguments.length == 1 ) _on_start.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
@@ -1022,20 +1081,33 @@ function fortnd ( n_dims ) {
         switch ( message.type ) {
 
             case 'start':
-                if ( _on_start ) _on_start();
+                for ( var i=0; i<_on_start_persist.length; ++i ) _on_start_persist[i]();
+                var cb;
+                while( ( cb = _on_start.shift() ) !== undefined ) cb();
                 break;
 
             case 'progress':
-                if ( _on_progress ) _on_progress( message.progress );
+                for ( var i=0; i<_on_progress_persist.length; ++i ) _on_progress_persist[i]( message.progress );
+                var cb;
+                while( ( cb = _on_progress.shift() ) !== undefined ) cb( message.progress );
                 break;
 
             case 'finish':
-                if ( _on_finish ) _on_finish();
+                for ( var i=0; i<_on_finish_persist.length; ++i ) _on_finish_persist[i]();
+                var cb;
+                while( ( cb = _on_finish.shift() ) !== undefined ) cb();
                 break;
 
             case 'timestep':
+
+                var data = {
+                    model_time: message.model_time,
+                    timestep: message.timestep,
+                    array: new Float32Array( message.array )
+                };
+
                 if ( message.timestep_index in _timestep_callbacks ) {
-                    _timestep_callbacks[ message.timestep_index ]( message.data );
+                    _timestep_callbacks[ message.timestep_index ]( data );
                 }
 
         }
