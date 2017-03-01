@@ -9,6 +9,22 @@ var f64_picker = document.getElementById( 'f64' );
 var progress_bar = document.getElementById( 'progress' );
 var progress_text = document.getElementById( 'percent' );
 
+var shader = adcirc
+    .gradient_shader( renderer.gl_context(), 4 )
+    .gradient_stops( [10, 1.0, -1.0, -2] )
+    .gradient_colors([
+        d3.color( 'dodgerblue' ),
+        d3.color( 'lightskyblue' ),
+        d3.color( 'lightgreen' ),
+        d3.color( 'forestgreen' )
+    ]);
+
+var view = adcirc.view( renderer.gl_context() );
+var geometry = adcirc.geometry( renderer.gl_context() )
+    .elemental_value( 'depth' );
+
+var mesh;
+
 sample_button.onclick = load_sample_file;
 f14_picker.onchange = function () { test_fort_14() };
 f63_picker.onchange = test_fort_63;
@@ -36,7 +52,7 @@ function load_sample_file () {
 function test_fort_14 ( f ) {
 
     f = f || f14_picker.files[0];
-    var mesh = adcirc.mesh();
+    mesh = adcirc.mesh();
 
     var f14 = adcirc.fort14()
         .on_start( start, true )
@@ -54,8 +70,19 @@ function test_fort_14 ( f ) {
 
     function on_loaded () {
         if ( mesh.num_nodes() && mesh.num_elements() ) {
-            renderer.add_mesh( mesh );
-            renderer.zoom_to( mesh, 500 );
+
+            geometry.mesh( mesh );
+            renderer.add_view( view( geometry, shader ) )
+                .zoom_to( mesh, 500 );
+
+            d3.interval( function () {
+                var d = new Float32Array( mesh.num_elements() );
+                for ( var i=0; i<mesh.num_elements(); ++i ) {
+                    d[i] = -2 + 12 * Math.random();
+                }
+                mesh.elemental_value( 'depth', d );
+            }, 250 )
+
         }
     }
 
