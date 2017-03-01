@@ -2,6 +2,7 @@ var canvas = document.getElementById( 'canvas' );
 var renderer = adcirc.gl_renderer()( canvas );
 
 var sample_button = document.getElementById( 'sample_button' );
+var animate_button = document.getElementById( 'animate' );
 var f14_picker = document.getElementById( 'f14' );
 var f63_picker = document.getElementById( 'f63' );
 var f64_picker = document.getElementById( 'f64' );
@@ -26,6 +27,7 @@ var geometry = adcirc.geometry( renderer.gl_context() )
 var mesh;
 
 sample_button.onclick = load_sample_file;
+animate_button.onclick = animate;
 f14_picker.onchange = function () { test_fort_14() };
 f63_picker.onchange = test_fort_63;
 f64_picker.onchange = test_fort_64;
@@ -47,6 +49,16 @@ function load_sample_file () {
     };
     xhr.send();
 
+}
+
+function animate () {
+    d3.interval( function () {
+        var d = new Float32Array( mesh.num_elements() );
+        for ( var i=0; i<mesh.num_elements(); ++i ) {
+            d[i] = -2 + 12 * Math.random();
+        }
+        mesh.elemental_value( 'depth', d );
+    }, 200 );
 }
 
 function test_fort_14 ( f ) {
@@ -75,13 +87,7 @@ function test_fort_14 ( f ) {
             renderer.add_view( view( geometry, shader ) )
                 .zoom_to( mesh, 500 );
 
-            d3.interval( function () {
-                var d = new Float32Array( mesh.num_elements() );
-                for ( var i=0; i<mesh.num_elements(); ++i ) {
-                    d[i] = -2 + 12 * Math.random();
-                }
-                mesh.elemental_value( 'depth', d );
-            }, 250 )
+
 
         }
     }
