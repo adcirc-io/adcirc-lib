@@ -6,3 +6,4 @@ At the moment, it is assumed that the adcirc-lib repository is located at the sa
 
 * [adcirc-io](https://github.com/atdyer/adcirc-io)
 * [adcirc-render](https://github.com/atdyer/adcirc-render)
+* [adcirc-cache](https://github.com/atdyer/adcirc-cache)
