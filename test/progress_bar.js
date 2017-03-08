@@ -4,7 +4,8 @@ function progress_bar () {
 
     var _color = d3.color( 'orangered' );
     var _height = 10;
-    var _progress = 34;
+    var _progress = 0;
+    var _shadow = false;
 
     function _progress_bar ( selection ) {
 
@@ -30,12 +31,8 @@ function progress_bar () {
         if ( !arguments.length ) return _height;
         _height = _;
         if ( _bar ) {
-            var vo = ( _height / 2 ) - 1;
-            var sb = vo - 1;
-            vo = vo < 0 ? 0 : vo;
-            sb = sb < 1 ? 1 : sb;
-            _bar.style( 'box-shadow', '0 ' + vo + 'px ' + sb + 'px -' + sb + 'px black' )
-                .style( 'min-height', _height + 'px' );
+            _bar.style( 'min-height', _height + 'px' );
+            _progress_bar.shadow( _shadow );
         }
         return _progress_bar;
     };
@@ -44,6 +41,19 @@ function progress_bar () {
         if ( !arguments.length ) return _progress;
         if ( _ >= 0 && _ <= 100 ) _progress = _;
         if ( _bar ) _bar.style( 'width', _progress + '%' );
+        return _progress_bar;
+    };
+
+    _progress_bar.shadow = function ( _ ) {
+        if ( !arguments.length ) _shadow = !_shadow;
+        else _shadow = !!_;
+        if ( _shadow && _bar ) {
+            var vo = ( _height / 2 ) - 1;
+            var sb = vo - 1;
+            vo = vo < 0 ? 0 : vo;
+            sb = sb < 1 ? 1 : sb;
+            _bar.style( 'box-shadow', '0 ' + vo + 'px ' + sb + 'px -' + sb + 'px black' );
+        }
         return _progress_bar;
     };
 

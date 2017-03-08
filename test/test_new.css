@@ -27,40 +27,13 @@ h1, h2, h3 {
     flex-direction: column;
 }
 
-.slider {
-
-    margin-top: 20px;
-
-    display: block;
-
-    width: 100%;
-    min-height: 20px;
-
-    background-color: lightgray;
-
-}
-
-.bar {
-
-    position: relative;
-    left: 80px;
-
-    width: 1px;
-    min-height: 20px;
-    background-color: dimgray;
-    background-clip: content-box;
-
-    margin: -4px;
-
-    border-width: 4px;
-    border-style: solid;
-    border-color: dimgray transparent dimgray transparent;
-
-    cursor: pointer;
-}
-
 .arrow-up {
     width: 0;
     height: 0;
     margin-left: -4px;
+}
+
+.voronoi path {
+    fill: none;
+    stroke: red;
 }
