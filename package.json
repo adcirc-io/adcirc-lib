@@ -14,11 +14,13 @@
   },
   "scripts": {
     "dev": "rollup -w --banner \"$(preamble)\" -f umd -n adcirc -o build/adcirc-lib.js -- index.js",
+    "minify": "uglifyjs --preamble \"$(preamble)\" build/adcirc-lib.js -c negate_iife=false -m -r build_fort14_worker,build_fortnd_worker -o build/adcirc-lib.min.js",
     "prepublish": "rm -rf build && mkdir build && rollup --banner \"$(preamble)\" -f umd -n adcirc -o build/adcirc-lib.js -- index.js"
   },
   "devDependencies": {
     "package-preamble": "0.0.2",
     "rollup": "^0.41.4",
-    "rollup-watch": "^3.2.2"
+    "rollup-watch": "^3.2.2",
+    "uglify-js": "^2.8.8"
   }
 }

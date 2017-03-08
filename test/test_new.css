@@ -1,0 +1,66 @@
+body {
+    overflow-x: hidden;
+    min-width: 600px;
+    margin: auto;
+}
+
+canvas {
+    width: 100%;
+    height: 600px;
+}
+
+h1, h2, h3 {
+    margin: 5px;
+}
+
+.content {
+    min-width: 600px;
+    max-width: 900px;
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.content-full {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.slider {
+
+    margin-top: 20px;
+
+    display: block;
+
+    width: 100%;
+    min-height: 20px;
+
+    background-color: lightgray;
+
+}
+
+.bar {
+
+    position: relative;
+    left: 80px;
+
+    width: 1px;
+    min-height: 20px;
+    background-color: dimgray;
+    background-clip: content-box;
+
+    margin: -4px;
+
+    border-width: 4px;
+    border-style: solid;
+    border-color: dimgray transparent dimgray transparent;
+
+    cursor: pointer;
+}
+
+.arrow-up {
+    width: 0;
+    height: 0;
+    margin-left: -4px;
+}
