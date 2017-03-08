@@ -15,7 +15,9 @@ function slider () {
 
         _selection = selection
             .style( 'position', 'relative' )
-            .style( 'width', '100%' );
+            .style( 'width', '100%' )
+            .style( 'margin-top', '4px' )
+            .style( 'margin-bottom', '4px' );
 
         _bar = _selection
             .selectAll( 'div' )
@@ -75,7 +77,6 @@ function slider () {
         if ( !arguments.length ) return _current;
         if ( _ >= 0 && _ < _count ) {
             _current = _;
-            console.log( _current, _count );
             if ( _bar ) _bar.style( 'left', 100 * _current / ( _count-1 ) + '%' );
         }
     };

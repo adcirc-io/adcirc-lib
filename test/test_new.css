@@ -1,4 +1,5 @@
 body {
+    font-family: monospace;
     overflow-x: hidden;
     min-width: 600px;
     margin: auto;
@@ -10,7 +11,7 @@ canvas {
 }
 
 h1, h2, h3 {
-    margin: 5px;
+    margin: 5px 0;
 }
 
 .content {
@@ -27,13 +28,16 @@ h1, h2, h3 {
     flex-direction: column;
 }
 
-.arrow-up {
-    width: 0;
-    height: 0;
-    margin-left: -4px;
+.section-v {
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
 }
 
-.voronoi path {
-    fill: none;
-    stroke: red;
+.section-h {
+    padding-top: 10px;
+    display: flex;
+    flex-direction: row;
+    flex: 1 0 auto;
 }

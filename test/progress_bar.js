@@ -11,8 +11,7 @@ function progress_bar () {
 
         _bar = selection
             .style( 'margin', 0 )
-            .style( 'padding', 0 )
-            .style( 'transition', 'width 200ms');
+            .style( 'padding', 0 );
 
         _progress_bar.color( _color );
         _progress_bar.height( _height );
@@ -41,6 +40,11 @@ function progress_bar () {
         if ( !arguments.length ) return _progress;
         if ( _ >= 0 && _ <= 100 ) _progress = _;
         if ( _bar ) _bar.style( 'width', _progress + '%' );
+        return _progress_bar;
+    };
+
+    _progress_bar.reset = function () {
+        _progress_bar.progress( 0 );
         return _progress_bar;
     };
 

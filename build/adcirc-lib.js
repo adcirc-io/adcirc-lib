@@ -719,6 +719,9 @@ function fort14 () {
 
 function build_fortnd_worker () {
 
+    var reading = false;
+    var queue = [];
+
     var reader;
     var file_size;
 
@@ -751,12 +754,29 @@ function build_fortnd_worker () {
 
             case 'timestep':
 
-                load_timestep( message.timestep_index );
+                queue.push( function () {
+                    load_timestep( message.model_timestep_index );
+                });
+                if ( !reading )
+                    check_queue();
+
                 break;
 
         }
 
     });
+
+    function check_queue () {
+
+        var cb = queue.shift();
+        if ( cb ) {
+            reading = true;
+            cb();
+        } else {
+            reading = false;
+        }
+
+    }
 
     function load_timestep ( timestep_index ) {
 
@@ -767,17 +787,12 @@ function build_fortnd_worker () {
             var start = timestep_map[ timestep ];
             var end = timestep_index == num_datasets - 1 ? file_size : timestep_map[ timesteps[ timestep_index + 1 ] ];
 
-            var bytes = end - start;
-            console.log( bytes + ' bytes' );
-
-            var t0 = performance.now();
             reader.read_block(
                 start,
                 end,
                 function ( data ) {
-                    var t1 = performance.now();
-                    var length = data.length;
-                    console.log( 'Read ' + length + ' bytes in ' + ( t1 - t0 ) + ' milliseconds' );
+                    post_timestep( timestep_index, parse_timestep( data ) );
+                    check_queue();
                 }
             );
 
@@ -914,6 +929,9 @@ function build_fortnd_worker () {
                     timesteps.push( (i+1)*ts_interval );
                 }
 
+                // Post info about the timeseries data
+                post_info();
+
                 // Map the timesteps
                 map_timesteps();
 
@@ -923,9 +941,73 @@ function build_fortnd_worker () {
 
     }
 
+    function parse_timestep ( data ) {
+
+        var regex_line = /.*\r?\n/g;
+        var regex_nonwhite = /\S+/g;
+        var ts = { array: new Float32Array( n_dims * num_nodes ) };
+        var match, dat;
+        var line = 0;
+
+        while ( ( match = regex_line.exec( data ) ) !== null ) {
+
+            if ( line == 0 ) {
+
+                dat = match[0].match( regex_nonwhite );
+                ts.model_time = parseFloat( dat[0] );
+                ts.timestep = parseInt( dat[1] );
+
+                line += 1;
+
+            } else {
+
+                dat = match[0].match( regex_nonwhite );
+
+                for ( var i=0; i<n_dims; ++i ) {
+                    ts.array[ line++ - 1 ] = parseFloat( dat[ 1 ] );
+                }
+
+
+            }
+
+        }
+
+        return ts;
+
+    }
+
     function on_error ( error ) {
 
         post_error( error );
+
+    }
+
+    function post_info () {
+        self.postMessage({
+            type: 'info',
+            file_size: file_size,                   // File size
+            num_datapoints: num_nodes,              // Number of data points per timestep
+            num_datasets: num_datasets,             // Number of complete datasets
+            num_dimensions: n_dims,                 // Number of data fields per data point
+            model_timestep: ts,                     // Number of timesteps
+            model_timestep_interval: ts_interval    // Output interval for timesteps
+        });
+    }
+
+    function post_timestep ( index, timestep ) {
+
+        var message = {
+            type: 'timestep',
+            model_time: timestep.model_time,
+            model_timestep: timestep.timestep,
+            model_timestep_index: index,
+            array: timestep.array.buffer
+        };
+
+        self.postMessage(
+            message,
+            [ message.array ]
+        );
 
     }
 
@@ -968,42 +1050,167 @@ function fortnd_worker () {
 
 }
 
+function timestep ( dimensions, worker, message ) {
+
+    var _timestep = {};
+    var _dimensions = dimensions;
+    var _worker = worker;
+
+    var _array;
+    var _model_time;
+    var _model_timestep;
+    var _model_timestep_index;
+
+    var _invalidated;
+
+    if ( message.hasOwnProperty( 'model_time' ) && message.hasOwnProperty( 'model_timestep' ) &&
+         message.hasOwnProperty( 'model_timestep_index' ) && message.hasOwnProperty( 'array' ) ) {
+
+        try {
+
+            _model_time = message.model_time;
+            _model_timestep = message.model_timestep;
+            _model_timestep_index = message.model_timestep_index;
+            _array = new Float32Array( message.array );
+            _invalidated = false;
+
+        } catch ( e ) {
+
+            console.error( 'Error building timestep' );
+            console.error( e.message );
+            throw( e );
+
+        }
+
+    } else {
+
+        console.error( 'Timestep is missing data' );
+        console.error( message );
+
+    }
+
+
+    _timestep.data = function () {
+
+        if ( !_invalidated ) return _array;
+        console.warn(
+            'Data for timestep ' + _model_timestep_index + 'has already been returned to worker for caching'
+        );
+
+    };
+
+    _timestep.dimensions = function () {
+        return _dimensions;
+    };
+
+    _timestep.finished = function () {
+
+        var message = {
+            type: 'return',
+            model_time: _model_time,
+            model_timestep: _model_timestep,
+            model_timestep_index: _model_timestep_index,
+            array: _array.buffer
+        };
+
+        _worker.postMessage(
+            message,
+            [ message.array ]
+        );
+
+        _invalidated = true;
+
+    };
+
+    _timestep.model_time = function ( _ ) {
+        if ( !arguments.length ) return _model_time;
+        _model_time = _;
+        return _timestep;
+    };
+
+    _timestep.model_timestep = function ( _ ) {
+        if ( !arguments.length ) return _model_timestep;
+        _model_timestep = _;
+        return _timestep;
+    };
+
+    _timestep.model_timestep_index = function ( _ ) {
+        if ( !arguments.length ) return _model_timestep_index;
+        _model_timestep_index = _;
+        return _timestep;
+    };
+
+    return _timestep;
+
+}
+
 function fortnd ( n_dims ) {
+
+    var _file_size;
+    var _num_datapoints;
+    var _num_datasets;
+    var _num_dimensions;
+    var _model_timestep;
+    var _model_timestep_interval;
 
     var _n_dims = n_dims;
     var _worker = fortnd_worker();
     var _fortndworker = function () {};
 
-    var _on_start;
-    var _on_progress;
-    var _on_finish;
+    var _on_start = [];
+    var _on_progress = [];
+    var _on_finish = [];
+    var _on_timestep = [];
 
-    var _timestep_callbacks = {};
+    var _on_start_persist = [];
+    var _on_progress_persist = [];
+    var _on_finish_persist = [];
+    var _on_timestep_persist = [];
 
-    _fortndworker.load_timestep = function ( timestep_index, callback ) {
-        _timestep_callbacks[ timestep_index ] = callback;
-        _worker.postMessage({
-            type: 'timestep',
-            timestep_index: timestep_index
-        });
+
+    _fortndworker.timestep = function ( index ) {
+        if ( index >=0 && index < _num_datasets ) {
+            _worker.postMessage({
+                type: 'timestep',
+                model_timestep_index: index
+            });
+        }
         return _fortndworker;
     };
 
     _fortndworker.on_finish = function ( _ ) {
-        if ( !arguments.length ) return _on_finish;
-        if ( typeof _ == 'function' ) _on_finish = _;
+        if ( !arguments.length ) return _fortndworker;
+        if ( typeof arguments[0] === 'function' ) {
+            if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
     _fortndworker.on_progress = function ( _ ) {
-        if ( !arguments.length ) return _on_progress;
-        if ( typeof _ == 'function' ) _on_progress = _;
+        if ( !arguments.length ) return _fortndworker;
+        if ( typeof arguments[0] === 'function' ) {
+            if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
     _fortndworker.on_start = function ( _ ) {
-        if ( !arguments.length ) return _on_start;
-        if ( typeof _ == 'function' ) _on_start = _;
+        if ( !arguments.length ) return _fortndworker;
+        if ( typeof arguments[0] === 'function' ) {
+            if ( arguments.length == 1 ) _on_start.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
+        }
+        return _fortndworker;
+    };
+
+    _fortndworker.on_timestep = function ( _ ) {
+        if ( !arguments.length ) return _fortndworker;
+        if ( typeof arguments[0] === 'function' ) {
+            if ( arguments.length == 1 ) _on_timestep.push( arguments[0] );
+            if ( arguments.length == 2 && arguments[1] === true ) _on_timestep_persist.push( arguments[0] );
+        }
         return _fortndworker;
     };
 
@@ -1021,22 +1228,36 @@ function fortnd ( n_dims ) {
 
         switch ( message.type ) {
 
+            case 'info':
+                _file_size = message.file_size;
+                _num_datapoints = message.num_datapoints;
+                _num_datasets = message.num_datasets;
+                _num_dimensions = message.num_dimensions;
+                _model_timestep = message.model_timestep;
+                _model_timestep_interval = message.model_timestep_interval;
+                break;
+
             case 'start':
-                if ( _on_start ) _on_start();
+                invoke_persistent( _on_start_persist );
+                invoke_oneoff( _on_start );
                 break;
 
             case 'progress':
-                if ( _on_progress ) _on_progress( message.progress );
+                invoke_persistent( _on_progress_persist, [ message.progress ] );
+                invoke_oneoff( _on_progress, [ message.progress ] );
                 break;
 
             case 'finish':
-                if ( _on_finish ) _on_finish();
+                invoke_persistent( _on_finish_persist );
+                invoke_oneoff( _on_finish );
                 break;
 
             case 'timestep':
-                if ( message.timestep_index in _timestep_callbacks ) {
-                    _timestep_callbacks[ message.timestep_index ]( message.data );
-                }
+
+                var _timestep = timestep( _n_dims, _worker, message );
+                invoke_persistent( _on_timestep_persist, [ _timestep ] );
+                invoke_oneoff( _on_timestep, [ _timestep ] );
+                break;
 
         }
 
@@ -1045,6 +1266,17 @@ function fortnd ( n_dims ) {
     _worker.postMessage({ type: 'n_dims', n_dims: _n_dims });
 
     return _fortndworker;
+
+    function invoke_persistent ( list, args ) {
+        for ( var i=0; i<list.length; ++i ) {
+            list[i].apply( list[i], args );
+        }
+    }
+
+    function invoke_oneoff ( list, args ) {
+        var cb;
+        while ( ( cb = list.shift() ) !== undefined ) cb.apply( cb, args );
+    }
 
 }
 
@@ -1628,10 +1860,6 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.elemental_value = function ( _ ) {
-        if ( !arguments.length ) {
-            _elemental_value = null;
-            return _geometry;
-        }
         _elemental_value = _;
         return _geometry;
     };
@@ -1730,10 +1958,6 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.nodal_value = function ( _ ) {
-        if ( !arguments.length ) {
-            _nodal_value = null;
-            return _geometry;
-        }
         _nodal_value = _;
         return _geometry;
     };
@@ -1791,10 +2015,52 @@ function geometry ( gl, indexed ) {
 
         if ( value == _nodal_value ) {
 
-            var buffer = _buffers.get( 'vertex_value' );
+            // There will be num_nodes values that need to be applied to 3*num_triangles values
+            var data = new Float32Array( 3*_num_triangles );
             var values = _mesh.nodal_value( value );
+            var _elements = _mesh.elements();
+            var _nodes = _mesh.nodes();
+
+            for ( var i=0; i<3*_num_triangles; ++i ) {
+
+                var node_number = _elements.array[ i ];
+                var node_index = _nodes.map.get( node_number );
+
+                data[ i ] = values[ node_index ];
+
+            }
+
+            var buffer = _buffers.get( 'vertex_value' );
             _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, new Float32Array( values ) );
+            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
+
+            _subscribers.forEach( function ( cb ) { cb( value ); } );
+
+        }
+
+        if ( value == _elemental_value ) {
+
+            // There will be num_triangles values that need to be applied to 3*num_triangles values
+            var data = new Float32Array( 3*_num_triangles );
+            var values = _mesh.elemental_value( value );
+            var _elements = _mesh.elements();
+            var _nodes = _mesh.nodes();
+
+            for ( var i=0; i<_num_triangles; ++i ) {            // Loop through elements
+
+                var node_number = _elements.array[ i ];
+                var node_index = _nodes.map.get( node_number );
+                var value = values[ node_index ];
+
+                data[ 3*i ] = value;
+                data[ 3*i + 1 ] = value;
+                data[ 3*i + 2 ] = value;
+
+            }
+
+            var buffer = _buffers.get( 'vertex_value' );
+            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
+            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
 
             _subscribers.forEach( function ( cb ) { cb( value ); } );
 
@@ -2183,7 +2449,7 @@ function mesh () {
     _mesh.elemental_value = function ( value, array ) {
         if ( arguments.length == 1 ) return _elemental_values.get( value );
         if ( arguments.length == 2 ) _elemental_values.set( value, array );
-        if ( _subscribers.has( value ) ) _subscribers.get( value ).forEach( function ( cb ) { cb(); } );
+        _subscribers.forEach( function ( cb ) { cb( value ); } );
     };
 
     _mesh.elements = function (_) {
@@ -2292,6 +2558,9 @@ function cache () {
     var _data;
     var _valid;
     var _start_index;
+
+    var _initialized = false;
+    var _on_ready = [];
 
 
     // Define the cache located to the left of this cache
@@ -2432,6 +2701,12 @@ function cache () {
 
     };
 
+    // Add a callback to be called once the cache has been filled
+    _cache.on_ready = function ( _ ) {
+        if ( typeof _ === 'function' ) _on_ready.push( _ );
+        return _cache;
+    };
+
     // Sets the dataset at dataset_index to dataset
     _cache.set = function ( dataset_index, dataset ) {
 
@@ -2439,6 +2714,13 @@ function cache () {
 
             _data[ _index( dataset_index ) ] = _transform( _index( dataset_index), dataset );
             _valid[ _index( dataset_index ) ] = true;
+
+            if ( !_initialized && _cache.is_full() ) {
+                _initialized = true;
+                for ( var i=0; i<_on_ready.length; ++i ) {
+                    _on_ready[i]();
+                }
+            }
 
         } else {
 
