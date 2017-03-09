@@ -547,115 +547,170 @@ function nest ( flat ) {
     return map;
 }
 
+function dispatcher ( object ) {
+
+    object = object || Object.create( null );
+
+    var _listeners = {};
+    var _oneoffs = {};
+
+    object.on = function ( type, listener ) {
+
+        if ( !arguments.length ) return object;
+        if ( arguments.length == 1 ) return _listeners[ type ];
+
+        if ( _listeners[ type ] === undefined ) {
+
+            _listeners[ type ] = [];
+
+        }
+
+        if ( _listeners[ type ].indexOf( listener ) === - 1 ) {
+
+            _listeners[ type ].push( listener );
+
+        }
+
+        return object;
+
+    };
+
+    object.once = function ( type, listener ) {
+
+        if ( !arguments.length ) return object;
+        if ( arguments.length == 1 ) return _oneoffs[ type ];
+
+        if ( _oneoffs[ type ] === undefined ) {
+
+            _oneoffs[ type ] = [];
+
+        }
+
+        if ( _oneoffs[ type ].indexOf( listener ) === - 1 ) {
+
+            _oneoffs[ type ].push( listener );
+
+        }
+
+        return object;
+
+    };
+
+    object.off = function ( type, listener ) {
+
+        var listenerArray = _listeners[ type ];
+        var oneoffArray = _oneoffs[ type ];
+        var index;
+
+        if ( listenerArray !== undefined ) {
+
+            index = listenerArray.indexOf( listener );
+
+            if ( index !== - 1 ) {
+
+                listenerArray.splice( index, 1 );
+
+            }
+
+        }
+
+        if ( oneoffArray !== undefined ) {
+
+            index = oneoffArray.indexOf( listener );
+
+            if ( index !== -1 ) {
+
+                oneoffArray.splice( index, 1 );
+
+            }
+
+        }
+
+        return object;
+
+    };
+
+    object.dispatch = function ( event ) {
+
+        var listenerArray = _listeners[ event.type ];
+        var oneoffArray = _oneoffs[ event.type ];
+
+        var array = [], i, length;
+
+        if ( listenerArray !== undefined ) {
+
+            event.target = object;
+
+            length = listenerArray.length;
+
+            for ( i = 0; i < length; i ++ ) {
+
+                array[ i ] = listenerArray[ i ];
+
+            }
+
+            for ( i = 0; i < length; i ++ ) {
+
+                array[ i ].call( object, event );
+
+            }
+
+        }
+
+        if ( oneoffArray !== undefined ) {
+
+            event.target = object;
+
+            length = oneoffArray.length;
+
+            for ( i = 0; i < length; i ++ ) {
+
+                array[ i ] = oneoffArray[ i ];
+
+            }
+
+            for ( i = 0; i < length; i ++ ) {
+
+                array[ i ].call( object, event );
+
+            }
+
+            _oneoffs[ event.type ] = [];
+
+        }
+
+        return object;
+
+    };
+
+    return object;
+
+}
+
 function fort14 () {
 
     var _worker = fort14_worker();
-    var _fort14 = function () {};
+    var _fort14 = dispatcher();
 
     var _elements;
     var _nodes;
 
-    var _on_start = [];
-    var _on_progress = [];
-    var _on_finish = [];
-
-    var _on_elements = [];
-    var _on_nodes = [];
-
-    var _on_start_persist = [];
-    var _on_progress_persist = [];
-    var _on_finish_persist = [];
-
-    var _on_elements_persist = [];
-    var _on_nodes_persist = [];
-
     _fort14.elements = function ( _ ) {
 
-        // No arguments, return cached data whether it exists or not
         if ( !arguments.length ) return _elements;
 
-        // A callback has been passed
-        if ( typeof arguments[0] === 'function' ) {
-
-            // If the user wants the callback to persist, add it to the queue
-            if ( arguments.length == 2 && arguments[1] === true ) _on_elements_persist.push( arguments[0] );
-
-            // If we've got cached data, immediately pass data to callback
-            if ( _elements ) return _( _elements );
-
-            // We're going to be waiting for data, so if it isn't persisting, add it to the one-off queue
-            if ( arguments.length < 2 || arguments[1] !== true ) _on_elements.push( arguments[0] );
-
-            _worker.postMessage({
-                type: 'get',
-                what: 'elements'
-            });
-
-            return _fort14;
-
-        }
-
-        // Data has been passed so cache it
         _elements = _;
+
         return _fort14;
 
     };
 
     _fort14.nodes = function ( _ ) {
 
-        // No arguments, return cached data whether it exists or not
         if ( !arguments.length ) return _nodes;
 
-        // A callback has been passed
-        if ( typeof arguments[0] === 'function' ) {
-
-            // If the user wants the callback to persist, add it to the queue
-            if ( arguments.length == 2 && arguments[1] === true ) _on_nodes_persist.push( arguments[0] );
-
-            // If we've got cached data, immediately pass data to callback
-            if ( _nodes ) return _( _nodes );
-
-            // We're going to be waiting for data, so if it isn't persisting, add it to the one-off queue
-            if ( arguments.length < 2 || arguments[1] !== true ) _on_nodes.push( arguments[0] );
-
-            _worker.postMessage({
-                type: 'get',
-                what: 'nodes'
-            });
-
-            return _fort14;
-
-        }
-
-        // Data has been passed so cache it
         _nodes = _;
-        return _fort14;
-    };
 
-    _fort14.on_finish = function ( _ ) {
-        if ( !arguments.length ) return _on_finish;
-        if ( typeof arguments[0] === 'function' ) {
-            if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
-        }
-        return _fort14;
-    };
-
-    _fort14.on_progress = function ( _ ) {
-        if ( !arguments.length ) return _on_progress;
-        if ( typeof arguments[0] == 'function' ) {
-            if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
-        }
-        return _fort14;
-    };
-
-    _fort14.on_start = function ( _ ) {
-        if ( !arguments.length ) return _on_start;
-        if ( typeof arguments[0] == 'function' ) {
-            if ( arguments.length == 1 ) _on_start.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
-        }
         return _fort14;
     };
 
@@ -673,41 +728,66 @@ function fort14 () {
         switch ( message.type ) {
 
             case 'start':
-                for ( var i=0; i<_on_start_persist.length; ++i ) _on_start_persist[i]();
-                var cb;
-                while( ( cb = _on_start.shift() ) !== undefined ) cb();
+
+                _fort14.dispatch( { type: 'start' } );
+
                 break;
 
             case 'progress':
-                for ( var i=0; i<_on_progress_persist.length; ++i ) _on_progress_persist[i]( message.progress );
-                var cb;
-                while( ( cb = _on_progress.shift() ) !== undefined ) cb( message.progress );
+
+                _fort14.dispatch( {
+                    type: 'progress',
+                    progress: message.progress
+                } );
+
                 break;
 
             case 'finish':
-                for ( var i=0; i<_on_finish_persist.length; ++i ) _on_finish_persist[i]();
-                var cb;
-                while( ( cb = _on_finish.shift() ) !== undefined ) cb();
+
+                _fort14.dispatch( { type: 'finish' } );
+
+                _worker.postMessage({
+                    type: 'get',
+                    what: 'nodes'
+                } );
+
+                _worker.postMessage({
+                    type: 'get',
+                    what: 'elements'
+                } );
+
                 break;
 
             case 'nodes':
+
                 _nodes = {
                     array: new Float32Array( message.node_array ),
                     map: nest( new Uint32Array( message.node_map ) )
                 };
-                for ( var i=0; i<_on_nodes_persist.length; ++i ) _on_nodes_persist[i]( _nodes );
-                var cb;
-                while ( ( cb = _on_nodes.shift() ) !== undefined ) cb( _nodes );
+
+                _fort14.dispatch( {
+                    type: 'nodes',
+                    nodes: _nodes
+                } );
+
+                if ( _nodes && _elements ) _fort14.dispatch( { type: 'ready' } );
+
                 break;
 
             case 'elements':
+
                 _elements = {
                     array: new Uint32Array( message.element_array ),
                     map: nest( new Uint32Array( message.element_map ) )
                 };
-                for ( var i=0; i<_on_elements_persist.length; ++i ) _on_elements_persist[i]( _nodes );
-                var cb;
-                while( ( cb = _on_elements.shift() ) !== undefined ) cb( _elements );
+
+                _fort14.dispatch( {
+                    type: 'elements',
+                    elements: _elements
+                } );
+
+                if ( _nodes && _elements ) _fort14.dispatch( { type: 'ready' } );
+
                 break;
         }
 
@@ -1155,71 +1235,60 @@ function fortnd ( n_dims ) {
 
     var _n_dims = n_dims;
     var _worker = fortnd_worker();
-    var _fortndworker = function () {};
+    var _fortnd = dispatcher();
 
-    var _on_start = [];
-    var _on_progress = [];
-    var _on_finish = [];
-    var _on_timestep = [];
-
-    var _on_start_persist = [];
-    var _on_progress_persist = [];
-    var _on_finish_persist = [];
-    var _on_timestep_persist = [];
-
-
-    _fortndworker.timestep = function ( index ) {
+    _fortnd.timestep = function ( index ) {
         if ( index >=0 && index < _num_datasets ) {
             _worker.postMessage({
                 type: 'timestep',
                 model_timestep_index: index
             });
         }
-        return _fortndworker;
+        return _fortnd;
     };
 
-    _fortndworker.on_finish = function ( _ ) {
-        if ( !arguments.length ) return _fortndworker;
-        if ( typeof arguments[0] === 'function' ) {
-            if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
-        }
-        return _fortndworker;
-    };
+    // _fortnd.on_finish = function ( _ ) {
+    //     if ( !arguments.length ) return _fortnd;
+    //     if ( typeof arguments[0] === 'function' ) {
+    //         if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
+    //         if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
+    //     }
+    //     return _fortnd;
+    // };
+    //
+    // _fortnd.on_progress = function ( _ ) {
+    //     if ( !arguments.length ) return _fortnd;
+    //     if ( typeof arguments[0] === 'function' ) {
+    //         if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
+    //         if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
+    //     }
+    //     return _fortnd;
+    // };
+    //
+    // _fortnd.on_start = function ( _ ) {
+    //     if ( !arguments.length ) return _fortnd;
+    //     if ( typeof arguments[0] === 'function' ) {
+    //         if ( arguments.length == 1 ) _on_start.push( arguments[0] );
+    //         if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
+    //     }
+    //     return _fortnd;
+    // };
+    //
+    // _fortnd.on_timestep = function ( _ ) {
+    //     if ( !arguments.length ) return _fortnd;
+    //     if ( typeof arguments[0] === 'function' ) {
+    //         if ( arguments.length == 1 ) _on_timestep.push( arguments[0] );
+    //         if ( arguments.length == 2 && arguments[1] === true ) _on_timestep_persist.push( arguments[0] );
+    //     }
+    //     return _fortnd;
+    // };
 
-    _fortndworker.on_progress = function ( _ ) {
-        if ( !arguments.length ) return _fortndworker;
-        if ( typeof arguments[0] === 'function' ) {
-            if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
-        }
-        return _fortndworker;
-    };
-
-    _fortndworker.on_start = function ( _ ) {
-        if ( !arguments.length ) return _fortndworker;
-        if ( typeof arguments[0] === 'function' ) {
-            if ( arguments.length == 1 ) _on_start.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
-        }
-        return _fortndworker;
-    };
-
-    _fortndworker.on_timestep = function ( _ ) {
-        if ( !arguments.length ) return _fortndworker;
-        if ( typeof arguments[0] === 'function' ) {
-            if ( arguments.length == 1 ) _on_timestep.push( arguments[0] );
-            if ( arguments.length == 2 && arguments[1] === true ) _on_timestep_persist.push( arguments[0] );
-        }
-        return _fortndworker;
-    };
-
-    _fortndworker.read = function ( file ) {
+    _fortnd.read = function ( file ) {
         _worker.postMessage({
             type: 'read',
             file: file
         });
-        return _fortndworker;
+        return _fortnd;
     };
 
     _worker.addEventListener( 'message', function ( message ) {
@@ -1229,34 +1298,56 @@ function fortnd ( n_dims ) {
         switch ( message.type ) {
 
             case 'info':
+
                 _file_size = message.file_size;
                 _num_datapoints = message.num_datapoints;
                 _num_datasets = message.num_datasets;
                 _num_dimensions = message.num_dimensions;
                 _model_timestep = message.model_timestep;
                 _model_timestep_interval = message.model_timestep_interval;
+
+                _fortnd.dispatch( {
+                    type: 'info',
+                    file_size: _file_size,
+                    num_datapoints: _num_datapoints,
+                    num_datasets: _num_datasets,
+                    num_dimensions: _num_dimensions,
+                    model_timestep: _model_timestep,
+                    model_timestep_interval: _model_timestep_interval
+                } );
+
                 break;
 
             case 'start':
-                invoke_persistent( _on_start_persist );
-                invoke_oneoff( _on_start );
+
+                _fortnd.dispatch( { type: 'start' } );
+
                 break;
 
             case 'progress':
-                invoke_persistent( _on_progress_persist, [ message.progress ] );
-                invoke_oneoff( _on_progress, [ message.progress ] );
+
+                _fortnd.dispatch( {
+                    type: 'progress',
+                    progress: message.progress
+                } );
+
                 break;
 
             case 'finish':
-                invoke_persistent( _on_finish_persist );
-                invoke_oneoff( _on_finish );
+
+                _fortnd.dispatch( { type: 'finish' } );
+
                 break;
 
             case 'timestep':
 
                 var _timestep = timestep( _n_dims, _worker, message );
-                invoke_persistent( _on_timestep_persist, [ _timestep ] );
-                invoke_oneoff( _on_timestep, [ _timestep ] );
+
+                _fortnd.dispatch( {
+                    type: 'timestep',
+                    timestep: _timestep
+                });
+
                 break;
 
         }
@@ -1265,18 +1356,9 @@ function fortnd ( n_dims ) {
 
     _worker.postMessage({ type: 'n_dims', n_dims: _n_dims });
 
-    return _fortndworker;
+    return _fortnd;
 
-    function invoke_persistent ( list, args ) {
-        for ( var i=0; i<list.length; ++i ) {
-            list[i].apply( list[i], args );
-        }
-    }
-
-    function invoke_oneoff ( list, args ) {
-        var cb;
-        while ( ( cb = list.shift() ) !== undefined ) cb.apply( cb, args );
-    }
+    
 
 }
 
@@ -2942,6 +3024,7 @@ exports.view = view;
 exports.basic_shader = basic_shader;
 exports.gradient_shader = gradient_shader;
 exports.cache = cache;
+exports.dispatcher = dispatcher;
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
