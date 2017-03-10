@@ -3,7 +3,7 @@ var canvas = d3.select( '#canvas' );
 var renderer = adcirc.gl_renderer()( canvas.node() );
 
 var progress = progress_bar().height( 2 );
-var slide = slider();
+var slide = slider().count( 50 );
 var f14_picker = button( 'Choose fort.14' ).file_picker( on_f14 );
 var f63_picker = button( 'Choose fort.63' ).file_picker( on_f63 );
 var f64_picker = button( 'Choose fort.64' );
@@ -15,6 +15,7 @@ f63_picker( d3.select( '#f63' ) );
 f64_picker( d3.select( '#f64' ) );
 
 var mesh = adcirc.mesh();
+var shader;
 
 function on_f14 ( file ) {
 
@@ -51,7 +52,6 @@ function on_f63 ( file ) {
         .once( 'ready', function () {
             console.log( 'Left loaded' );
             gl_cache.range( [0, 1] );
-            cache_left.print();
         });
 
     var cache_right = adcirc.cache()
@@ -59,7 +59,7 @@ function on_f63 ( file ) {
         .max_size( 50 )
         .getter( getter )
         .once( 'ready', function () {
-            cache_right.print();
+            console.log( 'Right loaded' );
         });
 
     var gl_cache = adcirc.cache()
@@ -69,12 +69,13 @@ function on_f63 ( file ) {
         .cache_right( cache_right )
         .transform( function ( index, data ) {
 
-            console.log( data );
-            mesh.nodal_value( 'depth', data );
+            mesh.nodal_value( 'depth', data.data() );
+            set_range( data.data_range() );
+            return [index];
 
         })
         .once( 'ready', function () {
-            gl_cache.print();
+            console.log( 'GL loaded' );
         });
 
     f63.read( file );
@@ -84,10 +85,22 @@ function on_f63 ( file ) {
     d3.select( 'body' ).on( 'keydown', function () {
         switch ( d3.event.key ) {
             case 'ArrowRight':
-                if ( current + 1 < 50 ) gl_cache.get( ++current );
+                if ( current + 1 < 50 ) {
+                    var data = gl_cache.get( current + 1 );
+                    if ( typeof data !== 'undefined' ) {
+                        current = current + 1;
+                        slide.current( current );
+                    }
+                }
                 break;
             case 'ArrowLeft':
-                if ( current - 1 >= 0 ) gl_cache.get( --current );
+                if ( current - 1 >= 0 ) {
+                    var data = gl_cache.get( current - 1 );
+                    if ( typeof data !== 'undefined'  ) {
+                        current = current - 1;
+                        slide.current( current );
+                    }
+                }
                 break;
         }
     });
@@ -96,12 +109,23 @@ function on_f63 ( file ) {
 
         f63.timestep( index, function ( event ) {
 
-            callback( index, event.timestep.data() );
+            callback( index, event.timestep );
 
         });
 
     }
 
+
+}
+
+function set_range ( range ) {
+
+    var dim = range[0];
+    var min = dim[0];
+    var max = dim[1];
+    var mid = ( max + min ) / 2;
+
+    shader.gradient_stops( [ min, mid, max ] );
 
 }
 
@@ -115,12 +139,11 @@ function display_mesh () {
         .nodal_value( 'depth' )
         .mesh( mesh );
 
-    var shader = adcirc
-        .gradient_shader( renderer.gl_context(), 4 )
-        .gradient_stops( [0.1, 0.025, -0.025, -0.1] )
+    shader = adcirc
+        .gradient_shader( renderer.gl_context(), 3 )
+        .gradient_stops( [0.1, 0.0, -0.1] )
         .gradient_colors([
             d3.color( 'dodgerblue' ),
-            d3.color( 'lightskyblue' ),
             d3.color( 'lightgreen' ),
             d3.color( 'forestgreen' )
         ]);

@@ -835,7 +835,7 @@ function build_fortnd_worker () {
             case 'timestep':
 
                 queue.push( function () {
-                    load_timestep( message.model_timestep_index );
+                    load_timestep( message.index );
                 });
                 if ( !reading )
                     check_queue();
@@ -1025,8 +1025,12 @@ function build_fortnd_worker () {
 
         var regex_line = /.*\r?\n/g;
         var regex_nonwhite = /\S+/g;
-        var ts = { array: new Float32Array( n_dims * num_nodes ) };
-        var match, dat;
+        var ts = {
+            array: new Float32Array( n_dims * num_nodes ),
+            min: ( new Array( n_dims ) ).fill( Infinity ),
+            max: ( new Array( n_dims ) ).fill( -Infinity )
+        };
+        var match, dat, val;
         var line = 0;
 
         while ( ( match = regex_line.exec( data ) ) !== null ) {
@@ -1044,7 +1048,15 @@ function build_fortnd_worker () {
                 dat = match[0].match( regex_nonwhite );
 
                 for ( var i=0; i<n_dims; ++i ) {
-                    ts.array[ line++ - 1 ] = parseFloat( dat[ 1 ] );
+
+                    val = parseFloat( dat[ 1 ] );
+                    ts.array[ line++ - 1 ] = val;
+
+                    if ( val !== -99999 ) {
+                        if ( val < ts.min[ i ] ) ts.min[ i ] = val;
+                        else if ( val > ts.max[ i ] ) ts.max[ i ] = val;
+                    }
+
                 }
 
 
@@ -1076,11 +1088,18 @@ function build_fortnd_worker () {
 
     function post_timestep ( index, timestep ) {
 
+        var ranges = [];
+        for ( var i=0; i<n_dims; ++i ) {
+            ranges.push( [ timestep.min[i], timestep.max[i] ] );
+        }
+
         var message = {
             type: 'timestep',
+            data_range: ranges,
+            dimensions: n_dims,
+            index: index,
             model_time: timestep.model_time,
             model_timestep: timestep.timestep,
-            model_timestep_index: index,
             array: timestep.array.buffer
         };
 
@@ -1130,29 +1149,29 @@ function fortnd_worker () {
 
 }
 
-function timestep ( dimensions, worker, message ) {
+function timestep ( message ) {
 
     var _timestep = {};
-    var _dimensions = dimensions;
-    var _worker = worker;
 
     var _array;
+    var _data_range;
+    var _dimensions;
+    var _index;
     var _model_time;
     var _model_timestep;
-    var _model_timestep_index;
 
-    var _invalidated;
-
-    if ( message.hasOwnProperty( 'model_time' ) && message.hasOwnProperty( 'model_timestep' ) &&
-         message.hasOwnProperty( 'model_timestep_index' ) && message.hasOwnProperty( 'array' ) ) {
+    if ( message.hasOwnProperty( 'data_range' ) && message.hasOwnProperty( 'dimensions' ) &&
+         message.hasOwnProperty( 'model_time' ) && message.hasOwnProperty( 'model_timestep' ) &&
+         message.hasOwnProperty( 'index' ) && message.hasOwnProperty( 'array' ) ) {
 
         try {
 
+            _data_range = message.data_range;
+            _dimensions = message.dimensions;
+            _index = message.index;
             _model_time = message.model_time;
             _model_timestep = message.model_timestep;
-            _model_timestep_index = message.model_timestep_index;
             _array = new Float32Array( message.array );
-            _invalidated = false;
 
         } catch ( e ) {
 
@@ -1172,34 +1191,22 @@ function timestep ( dimensions, worker, message ) {
 
     _timestep.data = function () {
 
-        if ( !_invalidated ) return _array;
-        console.warn(
-            'Data for timestep ' + _model_timestep_index + 'has already been returned to worker for caching'
-        );
+        return _array;
 
+    };
+
+    _timestep.data_range = function () {
+        return _data_range;
     };
 
     _timestep.dimensions = function () {
         return _dimensions;
     };
 
-    _timestep.finished = function () {
-
-        var message = {
-            type: 'return',
-            model_time: _model_time,
-            model_timestep: _model_timestep,
-            model_timestep_index: _model_timestep_index,
-            array: _array.buffer
-        };
-
-        _worker.postMessage(
-            message,
-            [ message.array ]
-        );
-
-        _invalidated = true;
-
+    _timestep.index = function ( _ ) {
+        if ( !arguments.length ) return _index;
+        _index = _;
+        return _timestep;
     };
 
     _timestep.model_time = function ( _ ) {
@@ -1211,12 +1218,6 @@ function timestep ( dimensions, worker, message ) {
     _timestep.model_timestep = function ( _ ) {
         if ( !arguments.length ) return _model_timestep;
         _model_timestep = _;
-        return _timestep;
-    };
-
-    _timestep.model_timestep_index = function ( _ ) {
-        if ( !arguments.length ) return _model_timestep_index;
-        _model_timestep_index = _;
         return _timestep;
     };
 
@@ -1237,18 +1238,27 @@ function fortnd ( n_dims ) {
     var _worker = fortnd_worker();
     var _fortnd = dispatcher();
 
+    // Kick off the loading of a specific timestep. Optionally
+    // pass in a callback that will be called only once when
+    // the data is loaded. The 'timestep' event will also
+    // be fired when the timestep has loaded
     _fortnd.timestep = function ( index, callback ) {
+
         if ( index >=0 && index < _num_datasets ) {
 
-            _fortnd.once( 'timestep' + index, function ( event ) {
+            if ( typeof callback === 'function' ) {
 
-                callback( event );
+                _fortnd.once( 'timestep' + index, function ( event ) {
 
-            } );
+                    callback( event );
+
+                } );
+
+            }
 
             _worker.postMessage({
                 type: 'timestep',
-                model_timestep_index: index
+                index: index
             });
 
         }
@@ -1315,7 +1325,7 @@ function fortnd ( n_dims ) {
 
             case 'timestep':
 
-                var _timestep = timestep( _n_dims, _worker, message );
+                var _timestep = timestep( message );
 
                 _fortnd.dispatch( {
                     type: 'timestep',
@@ -1323,7 +1333,7 @@ function fortnd ( n_dims ) {
                 });
 
                 _fortnd.dispatch( {
-                    type: 'timestep' + _timestep.model_timestep_index(),
+                    type: 'timestep' + _timestep.index(),
                     timestep: _timestep
                 });
 
@@ -1336,8 +1346,6 @@ function fortnd ( n_dims ) {
     _worker.postMessage({ type: 'n_dims', n_dims: _n_dims });
 
     return _fortnd;
-
-    
 
 }
 
@@ -1921,10 +1929,6 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.elemental_value = function ( _ ) {
-        if ( !arguments.length ) {
-            _elemental_value = null;
-            return _geometry;
-        }
         _elemental_value = _;
         return _geometry;
     };
@@ -2023,10 +2027,6 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.nodal_value = function ( _ ) {
-        if ( !arguments.length ) {
-            _nodal_value = null;
-            return _geometry;
-        }
         _nodal_value = _;
         return _geometry;
     };
@@ -2084,10 +2084,52 @@ function geometry ( gl, indexed ) {
 
         if ( value == _nodal_value ) {
 
-            var buffer = _buffers.get( 'vertex_value' );
+            // There will be num_nodes values that need to be applied to 3*num_triangles values
+            var data = new Float32Array( 3*_num_triangles );
             var values = _mesh.nodal_value( value );
+            var _elements = _mesh.elements();
+            var _nodes = _mesh.nodes();
+
+            for ( var i=0; i<3*_num_triangles; ++i ) {
+
+                var node_number = _elements.array[ i ];
+                var node_index = _nodes.map.get( node_number );
+
+                data[ i ] = values[ node_index ];
+
+            }
+
+            var buffer = _buffers.get( 'vertex_value' );
             _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, new Float32Array( values ) );
+            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
+
+            _subscribers.forEach( function ( cb ) { cb( value ); } );
+
+        }
+
+        if ( value == _elemental_value ) {
+
+            // There will be num_triangles values that need to be applied to 3*num_triangles values
+            var data = new Float32Array( 3*_num_triangles );
+            var values = _mesh.elemental_value( value );
+            var _elements = _mesh.elements();
+            var _nodes = _mesh.nodes();
+
+            for ( var i=0; i<_num_triangles; ++i ) {            // Loop through elements
+
+                var node_number = _elements.array[ i ];
+                var node_index = _nodes.map.get( node_number );
+                var value = values[ node_index ];
+
+                data[ 3*i ] = value;
+                data[ 3*i + 1 ] = value;
+                data[ 3*i + 2 ] = value;
+
+            }
+
+            var buffer = _buffers.get( 'vertex_value' );
+            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
+            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
 
             _subscribers.forEach( function ( cb ) { cb( value ); } );
 
@@ -2476,7 +2518,7 @@ function mesh () {
     _mesh.elemental_value = function ( value, array ) {
         if ( arguments.length == 1 ) return _elemental_values.get( value );
         if ( arguments.length == 2 ) _elemental_values.set( value, array );
-        if ( _subscribers.has( value ) ) _subscribers.get( value ).forEach( function ( cb ) { cb(); } );
+        _subscribers.forEach( function ( cb ) { cb( value ); } );
     };
 
     _mesh.elements = function (_) {
@@ -2581,6 +2623,7 @@ function cache () {
     var _size;
 
     var _getter;
+    var _has_getter;
     var _transform;
 
     var _data;
@@ -2617,14 +2660,7 @@ function cache () {
             return;
         }
 
-        if ( dataset_index >= _start_index && dataset_index < _start_index + _size ) {
-
-            if ( !_valid[ _index( dataset_index ) ] ) {
-
-                console.error( 'Invalid data in buffer.' );
-                return;
-
-            }
+        if ( _cache.valid( dataset_index ) ) {
 
             return _data[ _index( dataset_index ) ];
 
@@ -2648,6 +2684,7 @@ function cache () {
         if ( dataset_index == _start_index + _size ) {
 
             if ( _cache.shift_right() ) {
+
                 return _data[ _index( dataset_index ) ];
             }
 
@@ -2666,7 +2703,10 @@ function cache () {
     // the data.
     _cache.getter = function ( _ ) {
         if ( !arguments.length ) return _getter;
-        if ( typeof _ === 'function' ) _getter = _;
+        if ( typeof _ === 'function' ) {
+            _getter = _;
+            _has_getter = true;
+        }
         else console.error( 'Getter must be a function' );
         return _cache;
     };
@@ -2789,8 +2829,8 @@ function cache () {
             }
 
             // Otherwise, if there's a left cache and we're inside of it
-            // just get the value from that cache
-            else if ( _cache_left.contains( dataset_index ) ) {
+            // just get the value from that cache, as long as that value is loaded
+            else if ( _cache_left.valid( dataset_index ) ) {
 
                 // Get the data from the left cache
                 data = _cache_left.get( dataset_index );
@@ -2815,8 +2855,8 @@ function cache () {
             }
 
             // Otherwise, if theres a right cache and we're inside of it
-            // just get the value from that cache
-            else if ( _cache_right.contains( dataset_index ) ) {
+            // just get the value from that cache, as long as that value is loaded
+            else if ( _cache_right.valid( dataset_index ) ) {
 
                 // Get the data from the right cache
                 data = _cache_right.get( dataset_index );
@@ -2826,7 +2866,7 @@ function cache () {
         }
 
         // Check that we've got data or a method to get the data
-        if ( typeof data === 'undefined' && !_getter ) return false;
+        if ( typeof data === 'undefined' && !_has_getter ) return false;
 
         // Now perform the shift and invalidate the new data
         _start_index = dataset_index;
@@ -2868,8 +2908,8 @@ function cache () {
             }
 
             // Otherwise if there's a right cache and we're inside of it
-            // just get the value from that cache
-            else if ( _cache_right.contains( dataset_index ) ) {
+            // just get the value from that cache, as long as that value is loaded
+            else if ( _cache_right.valid( dataset_index ) ) {
 
                 // Get the data from the right cache
                 data = _cache_right.get( dataset_index );
@@ -2894,8 +2934,8 @@ function cache () {
             }
 
             // Otherwise, if there's a left cache and we're inside of it
-            // just get the value from that cache
-            else if ( _cache_left.contains( dataset_index ) ) {
+            // just get the value from that cache, as long as that value is loaded
+            else if ( _cache_left.valid( dataset_index ) ) {
 
                 // Get the data from the left cache
                 data = _cache_left.get( dataset_index );
@@ -2905,7 +2945,7 @@ function cache () {
         }
 
         // Check that we've got data or a method to get the data
-        if ( typeof data === 'undefined' && !_getter ) return false;
+        if ( typeof data === 'undefined' && !_has_getter ) return false;
 
         // Now perform the shift and invalidate the new data
         _start_index = _start_index + 1;
@@ -2922,9 +2962,9 @@ function cache () {
 
     };
 
-    // Returns the leftmost data in the cache and triggers
-    // a right shift. Synchronous, will ensure leftmost data
-    // is present before returning it.
+    // Returns the leftmost data in the cache if valid and triggers
+    // a right shift. Returns undefined without triggering a shift
+    // if the leftmost data is not valid.
     _cache.take_left = function () {
 
         var dataset;
@@ -2944,9 +2984,9 @@ function cache () {
 
     };
 
-    // Returns the rightmost data in the cache and triggers
-    // a left shift. Synchronous, will ensure rightmost data
-    // is present before returning it.
+    // Returns the rightmost data in the cache if valid and triggers
+    // a left shift. Returns undefined without triggering a shift
+    // if the rightmost data is not valid.
     _cache.take_right = function () {
 
         // Only allow the data to be taken if it is valid
@@ -2970,7 +3010,7 @@ function cache () {
     // Returns whether the dataset at that index is actually
     // loaded into the cache yet.
     _cache.valid = function ( dataset_index ) {
-        return _valid[ _index( dataset_index ) ];
+        return _cache.contains( dataset_index ) && _valid[ _index( dataset_index ) ];
     };
 
 
@@ -3006,13 +3046,7 @@ function cache () {
             return false;
         }
 
-        if (
-            (
-                typeof _cache_left === 'undefined' ||
-                typeof _cache_right === 'undefined'
-            ) &&
-            typeof _getter === 'undefined'
-        ) {
+        if ( ( typeof _cache_left === 'undefined' || typeof _cache_right === 'undefined') && !_has_getter ) {
             console.error( 'A getter must be defined if cache is not bounded by other caches' );
             return false;
         }

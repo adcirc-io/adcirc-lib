@@ -79,6 +79,7 @@ function slider () {
             _current = _;
             if ( _bar ) _bar.style( 'left', 100 * _current / ( _count-1 ) + '%' );
         }
+        return _slider;
     };
 
     _slider.height = function ( _ ) {
