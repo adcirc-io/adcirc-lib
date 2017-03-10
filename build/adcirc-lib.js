@@ -1237,51 +1237,24 @@ function fortnd ( n_dims ) {
     var _worker = fortnd_worker();
     var _fortnd = dispatcher();
 
-    _fortnd.timestep = function ( index ) {
+    _fortnd.timestep = function ( index, callback ) {
         if ( index >=0 && index < _num_datasets ) {
+
+            _fortnd.once( 'timestep' + index, function ( event ) {
+
+                callback( event );
+
+            } );
+
             _worker.postMessage({
                 type: 'timestep',
                 model_timestep_index: index
             });
+
         }
+
         return _fortnd;
     };
-
-    // _fortnd.on_finish = function ( _ ) {
-    //     if ( !arguments.length ) return _fortnd;
-    //     if ( typeof arguments[0] === 'function' ) {
-    //         if ( arguments.length == 1 ) _on_finish.push( arguments[0] );
-    //         if ( arguments.length == 2 && arguments[1] === true ) _on_finish_persist.push( arguments[0] );
-    //     }
-    //     return _fortnd;
-    // };
-    //
-    // _fortnd.on_progress = function ( _ ) {
-    //     if ( !arguments.length ) return _fortnd;
-    //     if ( typeof arguments[0] === 'function' ) {
-    //         if ( arguments.length == 1 ) _on_progress.push( arguments[0] );
-    //         if ( arguments.length == 2 && arguments[1] === true ) _on_progress_persist.push( arguments[0] );
-    //     }
-    //     return _fortnd;
-    // };
-    //
-    // _fortnd.on_start = function ( _ ) {
-    //     if ( !arguments.length ) return _fortnd;
-    //     if ( typeof arguments[0] === 'function' ) {
-    //         if ( arguments.length == 1 ) _on_start.push( arguments[0] );
-    //         if ( arguments.length == 2 && arguments[1] === true ) _on_start_persist.push( arguments[0] );
-    //     }
-    //     return _fortnd;
-    // };
-    //
-    // _fortnd.on_timestep = function ( _ ) {
-    //     if ( !arguments.length ) return _fortnd;
-    //     if ( typeof arguments[0] === 'function' ) {
-    //         if ( arguments.length == 1 ) _on_timestep.push( arguments[0] );
-    //         if ( arguments.length == 2 && arguments[1] === true ) _on_timestep_persist.push( arguments[0] );
-    //     }
-    //     return _fortnd;
-    // };
 
     _fortnd.read = function ( file ) {
         _worker.postMessage({
@@ -1336,6 +1309,7 @@ function fortnd ( n_dims ) {
             case 'finish':
 
                 _fortnd.dispatch( { type: 'finish' } );
+                _fortnd.dispatch( { type: 'ready' } );
 
                 break;
 
@@ -1345,6 +1319,11 @@ function fortnd ( n_dims ) {
 
                 _fortnd.dispatch( {
                     type: 'timestep',
+                    timestep: _timestep
+                });
+
+                _fortnd.dispatch( {
+                    type: 'timestep' + _timestep.model_timestep_index(),
                     timestep: _timestep
                 });
 
@@ -1942,6 +1921,10 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.elemental_value = function ( _ ) {
+        if ( !arguments.length ) {
+            _elemental_value = null;
+            return _geometry;
+        }
         _elemental_value = _;
         return _geometry;
     };
@@ -2040,6 +2023,10 @@ function geometry ( gl, indexed ) {
     };
 
     _geometry.nodal_value = function ( _ ) {
+        if ( !arguments.length ) {
+            _nodal_value = null;
+            return _geometry;
+        }
         _nodal_value = _;
         return _geometry;
     };
@@ -2097,52 +2084,10 @@ function geometry ( gl, indexed ) {
 
         if ( value == _nodal_value ) {
 
-            // There will be num_nodes values that need to be applied to 3*num_triangles values
-            var data = new Float32Array( 3*_num_triangles );
+            var buffer = _buffers.get( 'vertex_value' );
             var values = _mesh.nodal_value( value );
-            var _elements = _mesh.elements();
-            var _nodes = _mesh.nodes();
-
-            for ( var i=0; i<3*_num_triangles; ++i ) {
-
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-
-                data[ i ] = values[ node_index ];
-
-            }
-
-            var buffer = _buffers.get( 'vertex_value' );
             _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
-
-            _subscribers.forEach( function ( cb ) { cb( value ); } );
-
-        }
-
-        if ( value == _elemental_value ) {
-
-            // There will be num_triangles values that need to be applied to 3*num_triangles values
-            var data = new Float32Array( 3*_num_triangles );
-            var values = _mesh.elemental_value( value );
-            var _elements = _mesh.elements();
-            var _nodes = _mesh.nodes();
-
-            for ( var i=0; i<_num_triangles; ++i ) {            // Loop through elements
-
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-                var value = values[ node_index ];
-
-                data[ 3*i ] = value;
-                data[ 3*i + 1 ] = value;
-                data[ 3*i + 2 ] = value;
-
-            }
-
-            var buffer = _buffers.get( 'vertex_value' );
-            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
+            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, new Float32Array( values ) );
 
             _subscribers.forEach( function ( cb ) { cb( value ); } );
 
@@ -2531,7 +2476,7 @@ function mesh () {
     _mesh.elemental_value = function ( value, array ) {
         if ( arguments.length == 1 ) return _elemental_values.get( value );
         if ( arguments.length == 2 ) _elemental_values.set( value, array );
-        _subscribers.forEach( function ( cb ) { cb( value ); } );
+        if ( _subscribers.has( value ) ) _subscribers.get( value ).forEach( function ( cb ) { cb(); } );
     };
 
     _mesh.elements = function (_) {
@@ -2627,7 +2572,8 @@ function calculate_bbox ( node_array ) {
 
 function cache () {
 
-    var _cache = Object.create( null );
+    var _cache = dispatcher();
+
     var _cache_left;
     var _cache_right;
 
@@ -2639,11 +2585,8 @@ function cache () {
 
     var _data;
     var _valid;
+    var _num_valid = 0;
     var _start_index;
-
-    var _initialized = false;
-    var _on_ready = [];
-
 
     // Define the cache located to the left of this cache
     _cache.cache_left = function ( _ ) {
@@ -2659,8 +2602,14 @@ function cache () {
         return _cache;
     };
 
-    // Synchronous function guaranteed to return loaded
-    // dataset.
+    // Returns true if the dataset index currently falls
+    // inside the cache, false otherwise
+    _cache.contains = function ( dataset_index ) {
+        return dataset_index >= _start_index && dataset_index < _start_index + _size;
+    };
+
+    // Returns the dataset at the given index if it is loaded,
+    // otherwise returns undefined.
     _cache.get = function ( dataset_index ) {
 
         if ( !_is_initialized() ) {
@@ -2724,8 +2673,7 @@ function cache () {
 
     // Returns true if all data in the cache is valid, false otherwise
     _cache.is_full = function () {
-        return _data &&
-            _valid.map( function ( d ) { return d ? 1 : 0; } ).reduce( function ( a, b ) { return a + b; }, 0 ) == _size;
+        return _num_valid == _size;
     };
 
     // Define the upper bound of the total available datasets
@@ -2759,13 +2707,13 @@ function cache () {
 
         for ( var i=_start_index; i<_start_index + _size; ++i ) {
 
-            if ( _cache_left && i >= _cache_left.range()[0] && i < _cache_left.range()[1] ) {
+            if ( _cache_left && _cache_left.contains( i ) ) {
 
                 _cache.set( i, _cache_left.get( i ) );
 
             }
 
-            else if ( _cache_right && i >= _cache_right.range()[0] && i < _cache_right.range()[1] ) {
+            else if ( _cache_right && _cache_right.contains( i ) ) {
 
                 _cache.set( i, _cache_right.get( i ) );
 
@@ -2783,26 +2731,13 @@ function cache () {
 
     };
 
-    // Add a callback to be called once the cache has been filled
-    _cache.on_ready = function ( _ ) {
-        if ( typeof _ === 'function' ) _on_ready.push( _ );
-        return _cache;
-    };
-
     // Sets the dataset at dataset_index to dataset
     _cache.set = function ( dataset_index, dataset ) {
 
-        if ( dataset_index >= _start_index && dataset_index < _start_index + _size ) {
+        if ( _cache.contains( dataset_index ) ) {
 
             _data[ _index( dataset_index ) ] = _transform( _index( dataset_index), dataset );
-            _valid[ _index( dataset_index ) ] = true;
-
-            if ( !_initialized && _cache.is_full() ) {
-                _initialized = true;
-                for ( var i=0; i<_on_ready.length; ++i ) {
-                    _on_ready[i]();
-                }
-            }
+            _validate( dataset_index );
 
         } else {
 
@@ -2820,6 +2755,7 @@ function cache () {
         if ( _data ) console.warn( 'Warning: Resizing cache, all data will be lost' );
         _data = new Array( _size );
         _valid = new Array( _size ).fill( false );
+        _num_valid = 0;
         return _cache;
     };
 
@@ -2841,31 +2777,64 @@ function cache () {
             return false;
         }
 
-        // If there's a cache to the left, we need to make sure that
-        // it can be taken from before we attempt to shift.
         if ( _cache_left ) {
 
-            // Take the rightmost dataset from the left cache
-            data = _cache_left.take_right();
+            // If there's a cache immediately to the left, we need to steal
+            // its rightmost value and tell it to shift
+            if ( _start_index == _cache_left.range()[1] ) {
 
-            // Determine if it successfully started shifting
-            if ( typeof data === 'undefined' ) return false;
+                // Take the rightmost dataset from the left cache
+                data = _cache_left.take_right();
+
+            }
+
+            // Otherwise, if there's a left cache and we're inside of it
+            // just get the value from that cache
+            else if ( _cache_left.contains( dataset_index ) ) {
+
+                // Get the data from the left cache
+                data = _cache_left.get( dataset_index );
+
+            }
 
         }
 
-        // If there's a cache to the right, tell it to shift left
-        // if needed
-        if ( _cache_right && _start_index + _size - 1 < _cache_right.range()[0] ) {
-            _cache_right.shift_left();
+        if ( _cache_right ) {
+
+            // If there's a cache immediately to the right, we need to
+            // tell it to shift left (as long as it isn't bumping up
+            // against a left cache)
+            if ( _start_index + _size == _cache_right.range()[0] ) {
+
+                if ( _cache_left && _cache_right.range()[0] !== _cache_left.range()[1] ) {
+
+                    _cache_right.shift_left();
+
+                }
+
+            }
+
+            // Otherwise, if theres a right cache and we're inside of it
+            // just get the value from that cache
+            else if ( _cache_right.contains( dataset_index ) ) {
+
+                // Get the data from the right cache
+                data = _cache_right.get( dataset_index );
+
+            }
+
         }
+
+        // Check that we've got data or a method to get the data
+        if ( typeof data === 'undefined' && !_getter ) return false;
 
         // Now perform the shift and invalidate the new data
         _start_index = dataset_index;
-        _valid[ _index( _start_index ) ] = false;
+        _invalidate( _start_index );
 
-        // If there is a left cache, we've got its data. Otherwise
-        // we need to load the data asynchronously
-        if ( _cache_left )
+        // If we got the data from somewhere else, use it.
+        // Otherwise load the data asynchronously
+        if ( typeof data !== 'undefined' )
             _cache.set( dataset_index, data );
         else
             _getter( dataset_index, _cache.set );
@@ -2883,31 +2852,64 @@ function cache () {
         var dataset_index = _start_index + _size;
 
         // Stop shifting if there isn't one
-        if ( dataset_index > _max_size ) {
+        if ( dataset_index >= _max_size ) {
             return false;
         }
 
-        // If there's a cache to the right, we need to make sure that
-        // it can be taken from before we attempt to shift.
         if ( _cache_right ) {
 
-            // Take the leftmost dataset from the right cache
-            data = _cache_right.take_left();
+            // If there's a cache immediately to the right, we need to steal
+            // its leftmost value and tell it to shift
+            if ( dataset_index == _cache_right.range()[0] ) {
 
-            // Determine if it successfully started shifting
-            if ( typeof data === 'undefined' ) return false;
+                // Take the leftmost dataset from the right cache
+                data = _cache_right.take_left();
+
+            }
+
+            // Otherwise if there's a right cache and we're inside of it
+            // just get the value from that cache
+            else if ( _cache_right.contains( dataset_index ) ) {
+
+                // Get the data from the right cache
+                data = _cache_right.get( dataset_index );
+
+            }
 
         }
 
-        // If there's a cache to the left, tell it to shift right
-        // if needed
-        if ( _cache_left && _start_index >= _cache_left.range()[1] ) {
-            _cache_left.shift_right();
+        if ( _cache_left ) {
+
+            // If there's a cache immediately to the left, we need to
+            // tell it to shift right (as long as it isn't bumping up
+            // against a right cache)
+            if ( _start_index == _cache_left.range()[1] ) {
+
+                if ( _cache_right && _cache_right.range()[0] !== _cache_left.range()[1] ) {
+
+                    _cache_left.shift_right();
+
+                }
+
+            }
+
+            // Otherwise, if there's a left cache and we're inside of it
+            // just get the value from that cache
+            else if ( _cache_left.contains( dataset_index ) ) {
+
+                // Get the data from the left cache
+                data = _cache_left.get( dataset_index );
+
+            }
+
         }
+
+        // Check that we've got data or a method to get the data
+        if ( typeof data === 'undefined' && !_getter ) return false;
 
         // Now perform the shift and invalidate the new data
         _start_index = _start_index + 1;
-        _valid[ _index( dataset_index ) ] = false;
+        _invalidate( dataset_index );
 
         // If there is a right cache, we've got its data. Otherwise
         // we need to load the data asynchronously
@@ -2990,6 +2992,13 @@ function cache () {
 
     }
 
+    function _invalidate ( dataset_index ) {
+
+        _valid[ _index( dataset_index ) ] = false;
+        --_num_valid;
+
+    }
+
     function _is_initialized () {
 
         if ( typeof _size === 'undefined' || typeof _max_size === 'undefined' ) {
@@ -3009,6 +3018,15 @@ function cache () {
         }
 
         return true;
+
+    }
+
+    function _validate ( dataset_index ) {
+
+        _valid[ _index( dataset_index ) ] = true;
+        ++_num_valid;
+
+        if ( _cache.is_full() ) _cache.dispatch( { type: 'ready' } );
 
     }
 

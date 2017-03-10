@@ -19,16 +19,16 @@ var mesh = adcirc.mesh();
 function on_f14 ( file ) {
 
     var f14 = adcirc.fort14()
-        .on_progress( progress.progress, true )
-        .on_finish( progress.reset, true )
-        .nodes( function( nodes ) {
-            mesh.nodes( nodes );
-            display_mesh();
+        .on( 'start', progress.event )
+        .on( 'progress', progress.event )
+        .on( 'finish', progress.event )
+        .on( 'nodes', function( event ) {
+            mesh.nodes( event.nodes );
         })
-        .elements( function ( elements ) {
-            mesh.elements( elements );
-            display_mesh();
+        .on( 'elements', function ( event ) {
+            mesh.elements( event.elements );
         })
+        .on( 'ready', display_mesh )
         .read( file );
 
 }
@@ -36,9 +36,10 @@ function on_f14 ( file ) {
 function on_f63 ( file ) {
 
     var f63 = adcirc.fort63()
-        .on_progress( progress.progress, true )
-        .on_finish( progress.reset, true )
-        .on_finish( function () {
+        .on( 'start', progress.event )
+        .on( 'progress', progress.event )
+        .on( 'finish', progress.event )
+        .on( 'ready', function () {
             cache_left.range( [0, 20] );
             cache_right.range( [20, 40] );
         });
@@ -46,18 +47,19 @@ function on_f63 ( file ) {
     var cache_left = adcirc.cache()
         .size( 20 )
         .max_size( 50 )
-        .getter( f63.timestep )
-        .on_ready( function () {
+        .getter( getter )
+        .once( 'ready', function () {
             console.log( 'Left loaded' );
             gl_cache.range( [0, 1] );
+            cache_left.print();
         });
 
     var cache_right = adcirc.cache()
         .size( 20 )
         .max_size( 50 )
-        .getter( f63.timestep )
-        .on_ready( function () {
-            console.log( 'Right loaded' );
+        .getter( getter )
+        .once( 'ready', function () {
+            cache_right.print();
         });
 
     var gl_cache = adcirc.cache()
@@ -66,14 +68,14 @@ function on_f63 ( file ) {
         .cache_left( cache_left )
         .cache_right( cache_right )
         .transform( function ( index, data ) {
-            console.log( data.data() );
-            mesh.nodal_value( 'depth', data.data() );
-        });
 
-    f63.on_timestep( function ( timestep ) {
-        cache_left.set( timestep.model_timestep_index(), timestep );
-        cache_right.set( timestep.model_timestep_index(), timestep );
-    }, true );
+            console.log( data );
+            mesh.nodal_value( 'depth', data );
+
+        })
+        .once( 'ready', function () {
+            gl_cache.print();
+        });
 
     f63.read( file );
 
@@ -82,20 +84,32 @@ function on_f63 ( file ) {
     d3.select( 'body' ).on( 'keydown', function () {
         switch ( d3.event.key ) {
             case 'ArrowRight':
-                gl_cache.get( ++current );
+                if ( current + 1 < 50 ) gl_cache.get( ++current );
                 break;
             case 'ArrowLeft':
-                gl_cache.get( --current );
+                if ( current - 1 >= 0 ) gl_cache.get( --current );
                 break;
         }
     });
+
+    function getter ( index, callback ) {
+
+        f63.timestep( index, function ( event ) {
+
+            callback( index, event.timestep.data() );
+
+        });
+
+    }
 
 
 }
 
 function display_mesh () {
 
-    if ( !mesh.num_nodes() || !mesh.num_elements() ) return;
+    if ( !mesh.num_nodes() || !mesh.num_elements() ) {
+        return;
+    }
 
     var geometry = adcirc.geometry( renderer.gl_context() )
         .nodal_value( 'depth' )

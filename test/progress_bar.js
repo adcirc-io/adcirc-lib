@@ -26,6 +26,28 @@ function progress_bar () {
         return _progress_bar;
     };
 
+    _progress_bar.event = function ( event ) {
+
+        switch( event.type ) {
+
+            case 'start':
+                _progress_bar.reset();
+                break;
+
+            case 'progress':
+                _progress_bar.progress( event.progress );
+                break;
+
+            case 'finish':
+                _progress_bar.reset();
+                break;
+
+        }
+
+        return _progress_bar;
+
+    };
+
     _progress_bar.height = function ( _ ) {
         if ( !arguments.length ) return _height;
         _height = _;
