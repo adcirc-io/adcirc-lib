@@ -2,17 +2,21 @@
 var canvas = d3.select( '#canvas' );
 var renderer = adcirc.gl_renderer()( canvas.node() );
 
+var num_ts = 187;
+
 var progress = progress_bar().height( 2 );
-var slide = slider().count( 50 );
+var slide = slider().count( num_ts );
 var f14_picker = button( 'Choose fort.14' ).file_picker( on_f14 );
 var f63_picker = button( 'Choose fort.63' ).file_picker( on_f63 );
 var f64_picker = button( 'Choose fort.64' );
+var residual_picker = button( 'Choose Residuals' ).file_picker( on_residual );
 
 progress( d3.select( '#progress' ) );
 slide( d3.select( '#slider' ) );
 f14_picker( d3.select( '#f14' ) );
 f63_picker( d3.select( '#f63' ) );
 f64_picker( d3.select( '#f64' ) );
+residual_picker( d3.select( '#residual' ) );
 
 var mesh = adcirc.mesh();
 var shader;
@@ -47,7 +51,7 @@ function on_f63 ( file ) {
 
     var cache_left = adcirc.cache()
         .size( 20 )
-        .max_size( 50 )
+        .max_size( num_ts )
         .getter( getter )
         .once( 'ready', function () {
             console.log( 'Left loaded' );
@@ -56,7 +60,7 @@ function on_f63 ( file ) {
 
     var cache_right = adcirc.cache()
         .size( 20 )
-        .max_size( 50 )
+        .max_size( num_ts )
         .getter( getter )
         .once( 'ready', function () {
             console.log( 'Right loaded' );
@@ -64,7 +68,7 @@ function on_f63 ( file ) {
 
     var gl_cache = adcirc.cache()
         .size( 1 )
-        .max_size( 50 )
+        .max_size( num_ts )
         .cache_left( cache_left )
         .cache_right( cache_right )
         .transform( function ( index, data ) {
@@ -85,7 +89,7 @@ function on_f63 ( file ) {
     d3.select( 'body' ).on( 'keydown', function () {
         switch ( d3.event.key ) {
             case 'ArrowRight':
-                if ( current + 1 < 50 ) {
+                if ( current + 1 < num_ts ) {
                     var data = gl_cache.get( current + 1 );
                     if ( typeof data !== 'undefined' ) {
                         current = current + 1;
@@ -118,6 +122,92 @@ function on_f63 ( file ) {
 
 }
 
+function on_residual ( file ) {
+
+    var f63 = adcirc.fort63()
+        .on( 'start', progress.event )
+        .on( 'progress', progress.event )
+        .on( 'finish', progress.event )
+        .on( 'ready', function () {
+            cache_left.range( [0, 20] );
+            cache_right.range( [20, 187] );
+        });
+
+    var cache_left = adcirc.cache()
+        .size( 20 )
+        .max_size( num_ts )
+        .getter( getter )
+        .once( 'ready', function () {
+            console.log( 'Left loaded' );
+            gl_cache.range( [0, 1] );
+        });
+
+    var cache_right = adcirc.cache()
+        .size( 167 )
+        .max_size( num_ts )
+        .getter( getter )
+        .once( 'ready', function () {
+            console.log( 'Right loaded' );
+        });
+
+    var gl_cache = adcirc.cache()
+        .size( 1 )
+        .max_size( num_ts )
+        .cache_left( cache_left )
+        .cache_right( cache_right )
+        .transform( function ( index, data ) {
+
+            console.log( data.index(), data.model_time(), data.model_timestep() );
+            mesh.elemental_value( 'residual', data.data() );
+            var r = data.data_range()[0];
+            var range = [ [r[0]/2, r[1]/2] ];
+            set_range( range );
+            return [index];
+
+        })
+        .once( 'ready', function () {
+            console.log( 'GL loaded' );
+        });
+
+    f63.read( file );
+
+    var current = 0;
+
+    d3.select( 'body' ).on( 'keydown', function () {
+        switch ( d3.event.key ) {
+            case 'ArrowRight':
+                if ( current + 1 < num_ts ) {
+                    var data = gl_cache.get( current + 1 );
+                    if ( typeof data !== 'undefined' ) {
+                        current = current + 1;
+                        slide.current( current );
+                    }
+                }
+                break;
+            case 'ArrowLeft':
+                if ( current - 1 >= 0 ) {
+                    var data = gl_cache.get( current - 1 );
+                    if ( typeof data !== 'undefined'  ) {
+                        current = current - 1;
+                        slide.current( current );
+                    }
+                }
+                break;
+        }
+    });
+
+    function getter ( index, callback ) {
+
+        f63.timestep( index, function ( event ) {
+
+            callback( index, event.timestep );
+
+        });
+
+    }
+
+}
+
 function set_range ( range ) {
 
     var dim = range[0];
@@ -137,6 +227,7 @@ function display_mesh () {
 
     var geometry = adcirc.geometry( renderer.gl_context() )
         .nodal_value( 'depth' )
+        .elemental_value( 'residual' )
         .mesh( mesh );
 
     shader = adcirc

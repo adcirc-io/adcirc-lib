@@ -2112,14 +2112,12 @@ function geometry ( gl, indexed ) {
             // There will be num_triangles values that need to be applied to 3*num_triangles values
             var data = new Float32Array( 3*_num_triangles );
             var values = _mesh.elemental_value( value );
-            var _elements = _mesh.elements();
-            var _nodes = _mesh.nodes();
 
-            for ( var i=0; i<_num_triangles; ++i ) {            // Loop through elements
+            console.log( values.length, values[298] );
 
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-                var value = values[ node_index ];
+            for ( var i=0; i<_num_triangles; ++i ) {
+
+                var value = values[i];
 
                 data[ 3*i ] = value;
                 data[ 3*i + 1 ] = value;
