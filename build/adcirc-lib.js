@@ -2113,8 +2113,6 @@ function geometry ( gl, indexed ) {
             var data = new Float32Array( 3*_num_triangles );
             var values = _mesh.elemental_value( value );
 
-            console.log( values.length, values[298] );
-
             for ( var i=0; i<_num_triangles; ++i ) {
 
                 var value = values[i];
