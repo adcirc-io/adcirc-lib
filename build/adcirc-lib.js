@@ -896,87 +896,115 @@ function build_fortnd_worker () {
 
     }
 
-    function map_timesteps () {
+    function map_timesteps ( start_location ) {
+
+        var index = 0;
+        var timestep = timesteps[ index ];
+        var location = start_location;
 
         var header_found = false;
-        var next_timestep = 0;
-        var next_header = timesteps[ next_timestep ];
-        var next_location = 0;
+        var header_predicted = false;
+        var line_part = '';
 
-        // Start things off
+        var chunk_size = 65536;
+
         reader.read_block(
-            next_location,
-            next_location + 1024,
+            location,
+            location + chunk_size,
             parse_block
         );
 
-        function parse_block ( data ) {
+        function parse_block( data ) {
 
+            data = line_part + data;
+
+            // Regexes
             var regex_line = /.*\r?\n/g;
             var regex_nonwhite = /\S+/g;
             var match;
 
-            if ( header_found === false ) {
+            var last_index = 0;
+            var last_node = 1;
 
-                while ( ( match = regex_line.exec( data ) ) !== null ) {
+            while( ( match = regex_line.exec( data ) ) !== null ) {
 
-                    var dat = match[ 0 ].match( regex_nonwhite );
+                var dat = match[0].match( regex_nonwhite );
 
-                    if ( dat.length >= 2 ) {
+                if ( dat && dat.length >= 2 ) {
 
-                        var test_ts = parseInt( dat[ 1 ] );
-                        if ( test_ts == next_header ) {
+                    if ( !header_found ) {
 
-                            // Set flag that allows us to continue
+                        if ( parseFloat( dat[ 1 ] ) == timestep ) {
+
                             header_found = true;
+                            timestep_map[ timestep ] = location - line_part.length + match.index;
+                            post_progress( 100 * ( index / num_datasets ) );
 
-                            // Store the mapped location
-                            timestep_map[ next_header ] = next_location + match.index;
+                        } else {
 
-                            // Set the next location, which is the first node of the timestep
-                            next_location = next_location + regex_line.lastIndex;
+                            last_node = parseInt( dat[ 0 ] );
 
-                            // Increment to the next timestep
-                            next_timestep += 1;
-
-                            // Post progress
-                            post_progress( 100 * ( next_timestep / num_datasets ) );
-
-                            // Determine if we need to continue
-                            if ( next_timestep < num_datasets ) {
-
-                                next_header = timesteps[ next_timestep ];
-                                reader.read_block(
-                                    next_location,
-                                    next_location + 1024,
-                                    parse_block
-                                );
-
-                            } else {
-
-                                post_finish();
-
-                            }
                         }
+
                     }
+
+                    else {
+
+                        var jump_size = match[ 0 ].length * num_nodes;
+                        location = location - line_part.length + match.index + jump_size;
+                        index += 1;
+                        timestep = timesteps[ index ];
+                        header_predicted = true;
+                        header_found = false;
+                        break;
+
+                    }
+
                 }
+
+                last_index = regex_line.lastIndex;
+
             }
 
-            else {
+            line_part = '';
 
-                match = regex_line.exec( data );
-                next_location = next_location + num_nodes * match[0].length;
+            if ( !header_predicted ) {
 
-                header_found = false;
+                if ( last_node < num_nodes / 2 ) {
+
+                    location = location - chunk_size;
+                    line_part = '';
+
+
+                } else {
+
+                    location = location + chunk_size;
+                    line_part = data.slice( last_index );
+
+                }
+
+            } else {
+
+                header_predicted = false;
+
+            }
+
+            if ( index < num_datasets ) {
 
                 reader.read_block(
-                    next_location,
-                    next_location + 1024,
+                    location,
+                    location + chunk_size,
                     parse_block
                 );
 
+            } else {
+
+                post_finish();
+
             }
+
         }
+
     }
 
     function parse_header ( data ) {
@@ -984,6 +1012,7 @@ function build_fortnd_worker () {
         // Regexes
         var regex_line = /.*\r?\n/g;
         var regex_nonwhite = /\S+/g;
+        var end_of_header = 0;
 
         // Get the first line
         var match = regex_line.exec( data );
@@ -991,6 +1020,7 @@ function build_fortnd_worker () {
         if ( match !== null ) {
 
             agrid = match[0];
+            end_of_header += match[0].length;
 
             // Get the second line
             match = regex_line.exec( data );
@@ -998,6 +1028,7 @@ function build_fortnd_worker () {
             if ( match !== null ) {
 
                 info_line = match[0];
+                end_of_header += match[0].length;
 
                 var info = info_line.match( regex_nonwhite );
                 num_datasets = parseInt( info[0] );
@@ -1013,7 +1044,7 @@ function build_fortnd_worker () {
                 post_info();
 
                 // Map the timesteps
-                map_timesteps();
+                map_timesteps( end_of_header );
 
             }
 

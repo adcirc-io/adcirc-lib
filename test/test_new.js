@@ -159,9 +159,9 @@ function on_residual ( file ) {
 
             console.log( data.index(), data.model_time(), data.model_timestep() );
             mesh.elemental_value( 'residual', data.data() );
-            var r = data.data_range()[0];
-            var range = [ [r[0]/2, r[1]/2] ];
-            set_range( range );
+            // var r = data.data_range()[0];
+            // var range = [ [r[0]/2, r[1]/2] ];
+            // set_range( range );
             return [index];
 
         })
@@ -232,11 +232,11 @@ function display_mesh () {
 
     shader = adcirc
         .gradient_shader( renderer.gl_context(), 3 )
-        .gradient_stops( [0.1, 0.0, -0.1] )
+        .gradient_stops( [-0.015, 0.0, 0.01] )
         .gradient_colors([
-            d3.color( 'dodgerblue' ),
+            d3.color( 'steelblue' ),
             d3.color( 'lightgreen' ),
-            d3.color( 'forestgreen' )
+            d3.color( 'orangered' )
         ]);
 
     var view = adcirc.view( renderer.gl_context() );
