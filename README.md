@@ -4,6 +4,9 @@ At the moment, it is assumed that the adcirc-lib repository is located at the sa
 
 ## Supported plugins
 
-* [adcirc-io](https://github.com/atdyer/adcirc-io)
-* [adcirc-render](https://github.com/atdyer/adcirc-render)
 * [adcirc-cache](https://github.com/atdyer/adcirc-cache)
+* [adcirc-events](https://github.com/atdyer/adcirc-events)
+* [adcirc-io](https://github.com/atdyer/adcirc-io)
+* [adcirc-mesh](https://github.com/atdyer/adcirc-mesh)
+* [adcirc-render](https://github.com/atdyer/adcirc-render)
+* [adcirc-ui](https://github.com/atdyer/adcirc-ui)
