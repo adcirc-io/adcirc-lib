@@ -510,7 +510,8 @@ function build_fort14_worker () {
         var message = {
             type: 'nodes',
             node_array: node_array.buffer,
-            node_map: node_map_flat.buffer
+            node_map: node_map_flat.buffer,
+            dimensions: 3
         };
         self.postMessage(
             message,
@@ -762,7 +763,8 @@ function fort14 () {
 
                 _nodes = {
                     array: new Float32Array( message.node_array ),
-                    map: nest( new Uint32Array( message.node_map ) )
+                    map: nest( new Uint32Array( message.node_map ) ),
+                    dimensions: message.dimensions
                 };
 
                 _fort14.dispatch( {
@@ -1447,6 +1449,521 @@ function gl_extensions ( gl ) {
 
 }
 
+function web_gl_available ( canvas ) {
+
+    return !! ( window.WebGLRenderingContext && ( canvas.getContext( 'webgl' ) || canvas.getContext( 'experimental-webgl' ) ) );
+
+}
+
+function m4 () {
+
+    var mat = new Float32Array( 16 ).fill( 0 );
+    var tmp = new Float32Array( 16 );
+    mat[0] = mat[5] = mat[10] = mat[15] = 1;
+
+    mat.identity = function () {
+
+        mat.fill( 0 );
+        mat[0] = mat[5] = mat[10] = mat[15] = 1;
+
+        return mat;
+
+    };
+
+    mat.ortho = function ( left, right, bottom, top, near, far ) {
+
+        mat[0]  = 2 / ( right - left );
+        mat[1]  = 0;
+        mat[2]  = 0;
+        mat[3]  = 0;
+
+        mat[4]  = 0;
+        mat[5]  = 2 / (top - bottom);
+        mat[6]  = 0;
+        mat[7]  = 0;
+
+        mat[8]  = 0;
+        mat[9]  = 0;
+        mat[10] = -1 / (far - near);
+        mat[11] = 0;
+
+        mat[12] = (right + left) / (left - right);
+        mat[13] = (top + bottom) / (bottom - top);
+        mat[14] = -near / (near - far);
+        mat[15] = 1;
+
+        return mat;
+
+    };
+
+    mat.scale = function ( kx, ky, kz ) {
+
+        tmp[ 0] = kx * mat[0];
+        tmp[ 1] = kx * mat[1];
+        tmp[ 2] = kx * mat[2];
+        tmp[ 3] = kx * mat[3];
+        tmp[ 4] = ky * mat[4];
+        tmp[ 5] = ky * mat[5];
+        tmp[ 6] = ky * mat[6];
+        tmp[ 7] = ky * mat[7];
+        tmp[ 8] = kz * mat[8];
+        tmp[ 9] = kz * mat[9];
+        tmp[10] = kz * mat[10];
+        tmp[11] = kz * mat[11];
+        tmp[12] = mat[12];
+        tmp[13] = mat[13];
+        tmp[14] = mat[14];
+        tmp[15] = mat[15];
+
+        fill_mat();
+
+        return mat;
+
+    };
+
+    mat.translate = function ( tx, ty, tz ) {
+
+        fill_tmp();
+
+        tmp[12] = mat[0]*tx + mat[4]*ty + mat[ 8]*tz + mat[12];
+        tmp[13] = mat[1]*tx + mat[5]*ty + mat[ 9]*tz + mat[13];
+        tmp[14] = mat[2]*tx + mat[6]*ty + mat[10]*tz + mat[14];
+        tmp[15] = mat[3]*tx + mat[7]*ty + mat[11]*tz + mat[15];
+
+        return fill_mat();
+
+    };
+
+    function fill_mat () {
+
+        for ( var i=0; i<16; ++i ) {
+            mat[i] = tmp[i];
+        }
+
+        return mat;
+
+    }
+
+    function fill_tmp () {
+
+        for ( var i=0; i<16; ++i ) {
+            tmp[i] = mat[i];
+        }
+
+        return tmp;
+
+    }
+
+    return mat;
+
+}
+
+function gl_renderer ( selection ) {
+
+    var _renderer = dispatcher();
+    var _selection = selection;
+    var _canvas = selection.node();
+
+    if ( !web_gl_available( _canvas ) ) return;
+
+    var _gl_attributes = { alpha: false, antialias: false, premultiplieAlpha: false, stencil: true };
+    var _gl = _canvas.getContext( 'webgl', _gl_attributes ) || _canvas.getContext( 'experimental-webgl', _gl_attributes);
+
+    if ( _gl === null ) return;
+
+    var _extensions = gl_extensions( _gl );
+    _extensions.get( 'ANGLE_instanced_arrays' );
+    _extensions.get( 'OES_element_index_uint' );
+    _extensions.get( 'OES_standard_derivatives' );
+
+    var _width = 0;
+    var _height = 0;
+    var _pixel_ratio = 1;
+    var _clear_color = d3.color( 'white' );
+
+    var _projection_matrix = m4();
+    var _zoom = d3.zoom().on( 'zoom', zoomed );
+    _selection.call( _zoom );
+
+    var _needs_render = true;
+    var _views = [];
+
+    _renderer.add_view = function ( view ) {
+
+        view.on( 'update', _renderer.render );
+        _views.push( view );
+        update_projection();
+        return _renderer;
+
+    };
+
+    _renderer.clear_color = function ( _ ) {
+
+        if ( !arguments.length ) return _clear_color;
+        _clear_color = d3.rgb.apply( _clear_color, arguments );
+
+        _gl.clearColor(
+            _clear_color.r / 255,
+            _clear_color.g / 255,
+            _clear_color.b / 255,
+            _clear_color.opacity
+        );
+
+        return _renderer.render();
+
+    };
+
+    _renderer.gl_context = function () {
+
+        return _gl;
+
+    };
+
+    _renderer.remove_view = function ( view ) {
+
+        view.off( 'update', _renderer.render );
+        return _renderer;
+
+    };
+
+    _renderer.render = function () {
+
+        _needs_render = true;
+        return _renderer;
+
+    };
+
+    _renderer.zoom_to = function ( _ ) {
+
+        if ( !arguments.length ) return _renderer;
+
+        var bounds = _.bounding_box();
+        var duration = 0;
+        var dx = bounds[1][0] - bounds[0][0],
+            dy = bounds[1][1] - bounds[0][1],
+            x = (bounds[0][0] + bounds[1][0]) / 2,
+            y = _height - (bounds[0][1] + bounds[1][1]) / 2,
+            scale = 0.9 / Math.max( dx / _width, dy / _height ),
+            translate = [ _width / 2 - scale * x, _height / 2 - scale * y];
+
+        if ( arguments.length == 2 )
+            duration = arguments[1];
+
+        _selection
+            .transition()
+            .duration( duration )
+            .call(
+                _zoom.transform,
+                d3.zoomIdentity
+                    .translate( translate[0], translate[1] )
+                    .scale( scale )
+            );
+
+        return _renderer;
+
+    };
+
+    _canvas.addEventListener( 'webglcontextlost', bubble_event );
+    _canvas.addEventListener( 'webglcontextrestored', bubble_event );
+    _canvas.addEventListener( 'webglcontextcreationerror', bubble_event );
+
+    check_render();
+
+    return _renderer;
+
+
+    function bubble_event ( event ) {
+
+        _renderer.dispatch( event );
+
+    }
+
+    function check_render () {
+
+        if ( resize() || _needs_render ) {
+
+            _needs_render = false;
+            render();
+
+        }
+
+        requestAnimationFrame( check_render );
+
+    }
+
+    function render () {
+
+        _gl.clear( _gl.COLOR_BUFFER_BIT | _gl.DEPTH_BUFFER_BIT );
+
+        for ( var i=0; i<_views.length; ++i ) {
+            _views[i].render();
+        }
+
+    }
+
+    function resize () {
+
+        if ( _canvas.clientWidth !== _width || _canvas.clientHeight !== _height ) {
+
+            _width = _canvas.clientWidth;
+            _height = _canvas.clientHeight;
+            _canvas.width = _width * _pixel_ratio;
+            _canvas.height = _height * _pixel_ratio;
+            _gl.viewport( 0, 0, _width, _height );
+            update_projection();
+            return true;
+
+        }
+
+        return false;
+
+    }
+
+    function update_projection ( k, tx, ty ) {
+
+        if ( !arguments.length ) {
+            var t = d3.zoomTransform( _canvas );
+            return update_projection( t.k, t.x, t.y );
+        }
+
+        _projection_matrix
+            .ortho( 0, _width, _height, 0, -10000, 10000 )
+            .translate( tx, ty, 0 )
+            .scale( k, -k, 1 )
+            .translate( 0, -_height, 0 );
+
+        for ( var i=0; i<_views.length; ++i ) {
+            _views[i].shader().set_projection( _projection_matrix );
+        }
+
+    }
+
+    function zoomed () {
+
+        var t = d3.event.transform;
+        update_projection( t.k, t.x, t.y );
+        _renderer.render();
+
+    }
+
+}
+
+function geometry ( gl, mesh ) {
+
+    var _gl = gl;
+    var _mesh = mesh;
+
+    var _num_triangles = 0;
+    var _num_vertices = 0;
+
+    var _buffers = d3.map();
+    var _geometry = dispatcher();
+
+    _geometry.bind_buffer = function ( attribute ) {
+
+        var buffer = _buffers.get( attribute );
+
+        if ( buffer ) {
+
+            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
+            return buffer;
+
+        }
+
+    };
+
+    _geometry.bounding_box = function () {
+
+        return _mesh.bounding_box();
+
+    };
+
+    _geometry.drawArrays = function () {
+
+        _gl.drawArrays( _gl.TRIANGLES, 0, _num_triangles * 3 );
+
+    };
+
+
+    initialize( _mesh.nodes(), _mesh.elements() );
+
+    _mesh.on( 'elemental_value', on_elemental_value );
+    _mesh.on( 'nodal_value', on_nodal_value );
+
+
+    return _geometry;
+
+
+    function initialize ( nodes, elements ) {
+
+        _num_vertices = elements.array.length;
+        _num_triangles = elements.array.length / 3;
+
+        var vertex_position = new Float32Array( 2 * _num_vertices );
+        var vertex_value = new Float32Array( _num_vertices );
+        var vertex_normals = new Float32Array( 3 * _num_vertices );
+
+        var dimensions = nodes.dimensions;
+        for ( var i=0; i<_num_vertices; ++i ) {
+
+            var node_number = elements.array[ i ];
+            var node_index = nodes.map.get( node_number );
+
+            vertex_position[ 2 * i ] = nodes.array[ dimensions * node_index ];
+            vertex_position[ 2 * i + 1 ] = nodes.array[ dimensions * node_index + 1 ];
+
+        }
+
+        for ( var i=0; i<_num_triangles; ++i ) {
+            vertex_normals[ 9 * i ] = 1;
+            vertex_normals[ 9 * i + 4 ] = 1;
+            vertex_normals[ 9 * i + 8 ] = 1;
+        }
+
+        var position_buffer = _gl.createBuffer();
+        _gl.bindBuffer( _gl.ARRAY_BUFFER, position_buffer );
+        _gl.bufferData( _gl.ARRAY_BUFFER, vertex_position, _gl.STATIC_DRAW );
+
+        var value_buffer = _gl.createBuffer();
+        _gl.bindBuffer( _gl.ARRAY_BUFFER, value_buffer );
+        _gl.bufferData( _gl.ARRAY_BUFFER, vertex_value, _gl.DYNAMIC_DRAW );
+
+        var normal_buffer = _gl.createBuffer();
+        _gl.bindBuffer( _gl.ARRAY_BUFFER, normal_buffer );
+        _gl.bufferData( _gl.ARRAY_BUFFER, vertex_normals, _gl.STATIC_DRAW );
+
+        _buffers.set( 'vertex_position', {
+            buffer: position_buffer,
+            size: 2,
+            type: _gl.FLOAT,
+            normalized: false,
+            stride: 0,
+            offset: 0
+        });
+
+        _buffers.set( 'vertex_value', {
+            buffer: value_buffer,
+            size: 1,
+            type: _gl.FLOAT,
+            normalized: false,
+            stride: 0,
+            offset: 0
+        });
+
+        _buffers.set( 'vertex_normal', {
+            buffer: normal_buffer,
+            size: 3,
+            type: _gl.FLOAT,
+            normalized: false,
+            stride: 0,
+            offset: 0
+        });
+
+
+    }
+
+    function on_elemental_value ( event ) {
+
+        var data = new Float32Array( 3 * _num_triangles );
+
+        for ( var i=0; i<_num_triangles; ++i ) {
+
+            var value = event.array[i];
+
+            data[ 3 * i ] = value;
+            data[ 3 * i + 1 ] = value;
+            data[ 3 * i + 2 ] = value;
+
+        }
+
+        var buffer = _buffers.get( 'vertex_value' );
+        _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
+        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
+
+        _geometry.dispatch({
+            type: 'update',
+            value: event.value
+        });
+
+    }
+
+    function on_nodal_value ( event ) {
+
+        var data = new Float32Array( 3 * _num_triangles );
+        var nodes = _mesh.nodes();
+        var elements = _mesh.elements();
+
+        for ( var i=0; i<3*_num_triangles; ++i ) {
+
+            var node_number = elements.array[ i ];
+            var node_index = nodes.map.get( node_number );
+
+            data[ i ] = values[ node_index ];
+
+        }
+
+        var buffer = _buffers.get( 'vertex_value' );
+        _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
+        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
+
+        _geometry.dispatch({
+            type: 'update',
+            value: event.value
+        });
+
+    }
+
+}
+
+function view ( gl, geometry, shader ) {
+
+    var _gl = gl;
+    var _geometry = geometry;
+    var _shader = shader;
+
+    var _view = dispatcher();
+
+    _view.render = function () {
+
+        _shader.use();
+
+        _shader.attributes().each( function ( attribute, key ) {
+
+            var buffer = _geometry.bind_buffer( key );
+
+            if ( buffer !== 'undefined' ) {
+
+                _gl.vertexAttribPointer(
+                    attribute,
+                    buffer.size,
+                    buffer.type,
+                    buffer.normalize,
+                    buffer.stride,
+                    buffer.offset
+                );
+
+                _gl.enableVertexAttribArray( attribute );
+
+            }
+
+        } );
+
+        _geometry.drawArrays();
+
+    };
+
+    _view.shader = function () {
+
+        return _shader;
+
+    };
+
+    _geometry.on( 'update', _view.dispatch );
+
+    return _view;
+
+}
+
 function gl_shader ( gl, type, code, warn_cb, error_cb ) {
 
     var shader = gl.createShader( type );
@@ -1547,7 +2064,7 @@ function basic_shader ( gl ) {
     };
 
     _program.attributes = function ( _ ) {
-        if ( !arguments.length ) return _attributes.keys();
+        if ( !arguments.length ) return _attributes;
         _attributes.each( _ );
         return _program;
     };
@@ -1691,7 +2208,7 @@ function gradient_shader ( gl, num_colors, min, max ) {
     };
 
     _program.attributes = function ( _ ) {
-        if ( !arguments.length ) return _attributes.keys();
+        if ( !arguments.length ) return _attributes;
         _attributes.each( _ );
         return _program;
     };
@@ -1816,826 +2333,6 @@ function gradient_fragment () {
         '   gl_FragColor = mix( wire, vec4(_vertex_color, 1.0), edgeFactorTri() );',
         '}'
     ].join('\n');
-
-}
-
-function m4 () {
-
-    var mat = new Float32Array( 16 ).fill( 0 );
-    var tmp = new Float32Array( 16 );
-    mat[0] = mat[5] = mat[10] = mat[15] = 1;
-
-    mat.identity = function () {
-
-        mat.fill( 0 );
-        mat[0] = mat[5] = mat[10] = mat[15] = 1;
-
-        return mat;
-
-    };
-
-    mat.ortho = function ( left, right, bottom, top, near, far ) {
-
-        mat[0]  = 2 / ( right - left );
-        mat[1]  = 0;
-        mat[2]  = 0;
-        mat[3]  = 0;
-
-        mat[4]  = 0;
-        mat[5]  = 2 / (top - bottom);
-        mat[6]  = 0;
-        mat[7]  = 0;
-
-        mat[8]  = 0;
-        mat[9]  = 0;
-        mat[10] = -1 / (far - near);
-        mat[11] = 0;
-
-        mat[12] = (right + left) / (left - right);
-        mat[13] = (top + bottom) / (bottom - top);
-        mat[14] = -near / (near - far);
-        mat[15] = 1;
-
-        return mat;
-
-    };
-
-    mat.scale = function ( kx, ky, kz ) {
-
-        tmp[ 0] = kx * mat[0];
-        tmp[ 1] = kx * mat[1];
-        tmp[ 2] = kx * mat[2];
-        tmp[ 3] = kx * mat[3];
-        tmp[ 4] = ky * mat[4];
-        tmp[ 5] = ky * mat[5];
-        tmp[ 6] = ky * mat[6];
-        tmp[ 7] = ky * mat[7];
-        tmp[ 8] = kz * mat[8];
-        tmp[ 9] = kz * mat[9];
-        tmp[10] = kz * mat[10];
-        tmp[11] = kz * mat[11];
-        tmp[12] = mat[12];
-        tmp[13] = mat[13];
-        tmp[14] = mat[14];
-        tmp[15] = mat[15];
-
-        fill_mat();
-
-        return mat;
-
-    };
-
-    mat.translate = function ( tx, ty, tz ) {
-
-        fill_tmp();
-
-        tmp[12] = mat[0]*tx + mat[4]*ty + mat[ 8]*tz + mat[12];
-        tmp[13] = mat[1]*tx + mat[5]*ty + mat[ 9]*tz + mat[13];
-        tmp[14] = mat[2]*tx + mat[6]*ty + mat[10]*tz + mat[14];
-        tmp[15] = mat[3]*tx + mat[7]*ty + mat[11]*tz + mat[15];
-
-        return fill_mat();
-
-    };
-
-    function fill_mat () {
-
-        for ( var i=0; i<16; ++i ) {
-            mat[i] = tmp[i];
-        }
-
-        return mat;
-
-    }
-
-    function fill_tmp () {
-
-        for ( var i=0; i<16; ++i ) {
-            tmp[i] = mat[i];
-        }
-
-        return tmp;
-
-    }
-
-    return mat;
-
-}
-
-function geometry ( gl, indexed ) {
-
-    var _gl = gl;
-    var _indexed = indexed || false;
-
-    var _mesh;
-    var _buffers = d3.map();
-
-    var _elemental_value;
-    var _nodal_value;
-
-    var _bounding_box;
-    var _num_triangles;
-    var _num_vertices;
-
-    var _subscribers = [];
-
-    function _geometry () {}
-
-    _geometry.bind_buffer = function ( attribute ) {
-        var buffer = _buffers.get( attribute );
-        _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-        return buffer;
-    };
-
-    _geometry.bind_element_array = function () {
-
-        var buffer = _buffers.get( 'element_array' );
-        _gl.bindBuffer( _gl.ELEMENT_ARRAY_BUFFER, buffer.buffer );
-        return _geometry;
-
-    };
-
-    _geometry.bounding_box = function () {
-        return _bounding_box;
-    };
-
-    _geometry.elemental_value = function ( _ ) {
-        _elemental_value = _;
-        return _geometry;
-    };
-
-    _geometry.indexed = function () {
-        return _indexed;
-    };
-
-    _geometry.mesh = function ( _ ) {
-
-        if ( !arguments.length ) return _mesh;
-
-        _mesh = _;
-        _bounding_box = _mesh.bounding_box();
-
-        var _nodes = _mesh.nodes();
-        var _elements = _mesh.elements();
-
-        _num_triangles = _elements.array.length / 3;
-
-        if ( !_indexed ) {
-
-            _num_vertices = 3 * _num_triangles;
-
-            var _coord_array = new Float32Array( 2 * 3 * _num_triangles );      // x, y for all 3 corners
-            var _coord_value_array = new Float32Array( 3 * _num_triangles );    // z for all 3 corners
-
-            for ( var i=0; i<3*_num_triangles; ++i ) {      // Loop through element array
-
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-
-                _coord_array[ 2*i ] = _nodes.array[ 3*node_index ];
-                _coord_array[ 2*i + 1 ] = _nodes.array[ 3*node_index + 1 ];
-                _coord_value_array[ i ] = _nodes.array[ 3*node_index + 2 ];
-
-            }
-
-        } else {
-
-            _num_vertices = _nodes.array.length / 3;
-
-            var _coord_array = new Float32Array( 2 * _num_vertices / 3 );
-            var _coord_value_array = new Float32Array( _num_vertices / 3 );
-            var _element_array = new Uint32Array( _num_triangles );
-            for ( var i=0; i<_num_triangles; ++i ) {
-
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-                _coord_array[ node_index ] = _nodes.array[ node_index ];
-                _coord_array[ node_index + 1 ] = _nodes.array[ node_index + 1 ];
-                _coord_value_array[ node_index ] = _nodes.array[ node_index + 2 ];
-                _element_array[ i ] = node_index;
-
-            }
-
-            var _element_buffer = _gl.createBuffer();
-            _gl.bindBuffer( _gl.ELEMENT_ARRAY_BUFFER, _element_buffer );
-            _gl.bufferData( _gl.ELEMENT_ARRAY_BUFFER, _element_array, _gl.STATIC_DRAW );
-
-            _buffers.set( 'element_array', {
-                buffer: _element_buffer
-            });
-
-        }
-
-        var _vertex_buffer = _gl.createBuffer();
-        _gl.bindBuffer( _gl.ARRAY_BUFFER, _vertex_buffer );
-        _gl.bufferData( _gl.ARRAY_BUFFER, _coord_array, _gl.STATIC_DRAW );
-
-        var _vertex_value_buffer = _gl.createBuffer();
-        _gl.bindBuffer( _gl.ARRAY_BUFFER, _vertex_value_buffer );
-        _gl.bufferData( _gl.ARRAY_BUFFER, _coord_value_array, _gl.DYNAMIC_DRAW );
-
-        _buffers.set( 'vertex_position', {
-            buffer: _vertex_buffer,
-            size: 2,
-            type: _gl.FLOAT,
-            normalized: false,
-            stride: 0,
-            offset: 0
-        });
-
-        _buffers.set( 'vertex_value', {
-            buffer: _vertex_value_buffer,
-            size: 1,
-            type: _gl.FLOAT,
-            normalize: false,
-            stride: 0,
-            offset: 0
-        });
-
-        _mesh.subscribe( on_mesh_update );
-
-        return _geometry;
-    };
-
-    _geometry.nodal_value = function ( _ ) {
-        _nodal_value = _;
-        return _geometry;
-    };
-
-    _geometry.num_triangles = function () {
-        return _num_triangles;
-    };
-
-    _geometry.num_vertices = function () {
-        return _num_vertices;
-    };
-
-    _geometry.request_vertex_attribute = function ( attribute ) {
-
-        switch( attribute ) {
-
-            case 'vertex_normal':
-                var normals = build_vertex_normals();
-                var buffer = _gl.createBuffer();
-                _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer );
-                _gl.bufferData( _gl.ARRAY_BUFFER, normals, _gl.STATIC_DRAW );
-                _buffers.set( 'vertex_normal', {
-                    buffer: buffer,
-                    size: 3,
-                    type: _gl.FLOAT,
-                    normalized: false,
-                    stride: 0,
-                    offset: 0
-                });
-                break;
-
-            case 'vertex_position':
-            case 'vertex_value':
-                break;
-
-            default:
-                console.warn( attribute + ' attribute not supported' );
-
-        }
-
-    };
-
-    _geometry.subscribe = function ( _ ) {
-        if ( !arguments.length ) {
-            _subscribers = [];
-            return _geometry;
-        }
-        _subscribers.push( _ );
-        return _geometry;
-    };
-
-    return _geometry;
-
-    function on_mesh_update ( value ) {
-
-        if ( value == _nodal_value ) {
-
-            // There will be num_nodes values that need to be applied to 3*num_triangles values
-            var data = new Float32Array( 3*_num_triangles );
-            var values = _mesh.nodal_value( value );
-            var _elements = _mesh.elements();
-            var _nodes = _mesh.nodes();
-
-            for ( var i=0; i<3*_num_triangles; ++i ) {
-
-                var node_number = _elements.array[ i ];
-                var node_index = _nodes.map.get( node_number );
-
-                data[ i ] = values[ node_index ];
-
-            }
-
-            var buffer = _buffers.get( 'vertex_value' );
-            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
-
-            _subscribers.forEach( function ( cb ) { cb( value ); } );
-
-        }
-
-        if ( value == _elemental_value ) {
-
-            // There will be num_triangles values that need to be applied to 3*num_triangles values
-            var data = new Float32Array( 3*_num_triangles );
-            var values = _mesh.elemental_value( value );
-
-            for ( var i=0; i<_num_triangles; ++i ) {
-
-                var value = values[i];
-
-                data[ 3*i ] = value;
-                data[ 3*i + 1 ] = value;
-                data[ 3*i + 2 ] = value;
-
-            }
-
-            var buffer = _buffers.get( 'vertex_value' );
-            _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-            _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
-
-            _subscribers.forEach( function ( cb ) { cb( value ); } );
-
-        }
-
-    }
-
-    function build_vertex_normals () {
-
-        if ( !_indexed ) {
-
-            var _vertex_normals = new Float32Array( 9 * _num_triangles );
-            _vertex_normals.fill( 0 );
-            for ( var i=0; i<_num_triangles; ++i ) {
-                _vertex_normals[ 9 * i ] = 1;
-                _vertex_normals[ 9 * i + 4 ] = 1;
-                _vertex_normals[ 9 * i + 8 ] = 1;
-            }
-
-            return _vertex_normals;
-
-        }
-
-        console.error( 'You shouldn\'t be making vertex normals for indexed arrays' );
-
-    }
-
-}
-
-function view ( gl ) {
-
-    var _gl = gl;
-    var _geometry;
-    var _shader;
-
-    var _subscribers = [];
-
-    function _view ( geometry, shader ) {
-
-        _geometry = geometry;
-        _shader = shader;
-
-        _shader.attributes( function ( attribute, key ) {
-            _geometry.request_vertex_attribute( key );
-        });
-
-        _geometry.subscribe( on_geometry_update );
-
-        return _view;
-
-    }
-
-    _view.bounding_box = function () {
-        if ( _geometry ) return _geometry.bounding_box();
-        return [[null,null,null], [null,null,null]];
-    };
-
-    _view.geometry = function () {
-        return _geometry;
-    };
-
-    _view.render = function () {
-
-        if ( _geometry && _shader ) {
-
-            _shader.use();
-
-            _shader.attributes( function ( attribute, key ) {
-
-                var buffer = _geometry.bind_buffer( key );
-                _gl.vertexAttribPointer( attribute, buffer.size, buffer.type, buffer.normalized, buffer.stride, buffer.offset );
-                _gl.enableVertexAttribArray( attribute );
-
-            });
-
-            if ( _geometry.indexed() ) {
-
-                _geometry.bind_element_array();
-                _gl.drawElements(
-                    _gl.TRIANGLES,
-                    _geometry.num_triangles() * 3,
-                    _gl.UNSIGNED_INT,
-                    0
-                );
-
-            } else {
-
-                _gl.drawArrays( _gl.TRIANGLES, 0, _geometry.num_triangles() * 3 );
-
-            }
-
-        }
-
-        return _view;
-
-    };
-
-    _view.shader = function () {
-        return _shader;
-    };
-
-    _view.subscribe = function ( _ ) {
-        if ( !arguments.length ) {
-            _subscribers = [];
-            return _view;
-        }
-        _subscribers.push( _ );
-        return _view;
-    };
-
-    function on_geometry_update () {
-
-        _subscribers.forEach( function ( cb ) { cb.apply( cb, arguments ); });
-
-    }
-
-    return _view;
-
-}
-
-function gl_renderer () {
-
-    var _gl,
-        _extensions;
-
-    var _needs_render = true;
-
-    var _canvas,
-        _width = 300,
-        _height = 150,
-        _pixel_ratio = 1;
-
-    var _selection,
-        _zoom = d3.zoom().on( 'zoom', zoomed );
-
-    var _projection_matrix = m4();
-
-    var _clear_color = d3.color( '#666666' );
-
-    var _on_context_lost,
-        _on_error;
-
-    var _views = [];
-
-    function _renderer ( canvas ) {
-
-        // Keep local reference to the canvas
-        _canvas = canvas;
-        _selection = d3.select( _canvas );
-
-        // Verify webgl availability
-        if ( !web_gl_available( canvas ) ) {
-            if ( _on_error ) _on_error ( 'WebGL not supported' );
-            return;
-        }
-
-        var _attributes = {
-            alpha: false,
-            antialias: false,
-            premultipliedAlpha: false,
-            stencil: true
-        };
-
-        // Acquire the webgl context
-        _gl = _canvas.getContext( 'webgl', _attributes ) || _canvas.getContext( 'experimental-webgl', _attributes );
-
-        if ( _gl === null ) {
-            if ( _on_error ) _on_error ( 'Error creating WebGL context' );
-            return;
-        }
-
-        // Connect any existing event listeners
-        if ( _on_context_lost ) _canvas.addEventListener( 'webglcontextlost', _on_context_lost, false );
-
-        // Load extensions
-        _extensions = gl_extensions( _gl );
-        _extensions.get( 'ANGLE_instanced_arrays' );
-        _extensions.get( 'OES_element_index_uint' );
-        _extensions.get( 'OES_standard_derivatives' );
-
-        // Set up the renderer
-        _renderer.clear_color( _renderer.clear_color() );
-        check_render();
-
-        // Set up interactivity
-        _selection.call( _zoom );
-
-        return _renderer;
-
-    }
-
-    _renderer.add_mesh = function ( m ) {
-
-        var geo = geometry( _gl ).mesh( m );
-        // var shader = basic_shader( _gl );
-        // var shader = gradient_shader( _gl, 3 ).wire_alpha( 0.3 ).wire_width( 1.0 );
-        var shader = gradient_shader( _gl, 10, geo.bounding_box()[0][2], geo.bounding_box()[1][2] );
-        //     .set_gradient( [ 0, 0.5, 1 ], [ d3.color('steelblue'), d3.color('white'), d3.color('green') ] )
-        //     .wire_color( d3.color( 'black' ) )
-        //     .set_wire_alpha( 0.25 )
-        //     .set_wire_width( 2.5 );
-        var vew = view( _gl );
-
-        _views.push( vew( geo, shader ) );
-
-        update_projection();
-
-        return _renderer.render();
-
-    };
-
-    _renderer.add_view = function ( view$$1 ) {
-
-        view$$1.subscribe( _renderer.render );
-        _views.push( view$$1 );
-        update_projection();
-        return _renderer.render();
-
-    };
-
-    _renderer.clear_color = function (_) {
-        if ( !arguments.length ) return _clear_color;
-        if ( arguments.length == 1 ) _clear_color = _;
-        if ( arguments.length == 3 ) _clear_color = d3.rgb( arguments[0], arguments[1], arguments[2] );
-        if ( arguments.length == 4 ) _clear_color = d3.rgb( arguments[0], arguments[1], arguments[2], arguments[3] );
-        if ( _gl && _clear_color ) {
-            _gl.clearColor(
-                _clear_color.r / 255,
-                _clear_color.g / 255,
-                _clear_color.b / 255,
-                _clear_color.opacity
-            );
-            _renderer.render();
-        }
-        return _renderer;
-    };
-
-    _renderer.gl_context = function (_) {
-        if ( !arguments.length ) return _gl;
-        _gl = _;
-        return _renderer;
-    };
-
-    _renderer.on_context_lost = function (_) {
-        if ( !arguments.length ) return _on_context_lost;
-        if ( typeof _ === 'function' ) _on_context_lost = _;
-        return _renderer;
-    };
-
-    _renderer.on_error = function (_) {
-        if ( !arguments.length ) return _on_error;
-        if ( typeof _ === 'function' ) _on_error = _;
-        return _renderer;
-    };
-
-    _renderer.render = function () {
-
-        _needs_render = true;
-        return _renderer;
-
-    };
-
-    _renderer.zoom_to = function (_) {
-
-        if ( !arguments.length ) return _renderer;
-
-        var bounds = _.bounding_box();
-        var duration = 0;
-        var dx = bounds[1][0] - bounds[0][0],
-            dy = bounds[1][1] - bounds[0][1],
-            x = (bounds[0][0] + bounds[1][0]) / 2,
-            y = _height - (bounds[0][1] + bounds[1][1]) / 2,
-            scale = 0.9 / Math.max( dx / _width, dy / _height ),
-            translate = [ _width / 2 - scale * x, _height / 2 - scale * y];
-
-        if ( arguments.length == 2 )
-            duration = arguments[1];
-
-        _selection
-            .transition()
-            .duration( duration )
-            .call(
-                _zoom.transform,
-                d3.zoomIdentity
-                    .translate( translate[0], translate[1] )
-                    .scale( scale )
-            );
-
-    };
-
-
-    return _renderer;
-
-    function check_render () {
-
-        if ( resize() || _needs_render ) {
-
-            _needs_render = false;
-            render();
-
-        }
-
-        requestAnimationFrame( check_render );
-
-    }
-
-    function render () {
-
-        _gl.clear( _gl.COLOR_BUFFER_BIT | _gl.DEPTH_BUFFER_BIT );
-
-        for ( var i=0; i<_views.length; ++i ) {
-            _views[i].render();
-        }
-
-    }
-
-    function resize () {
-
-        if ( _canvas.clientWidth != _width || _canvas.clientHeight != _height ) {
-
-            _width = _canvas.clientWidth;
-            _height = _canvas.clientHeight;
-            _canvas.width = _width * _pixel_ratio;
-            _canvas.height = _height * _pixel_ratio;
-            _gl.viewport( 0, 0, _width, _height );
-            update_projection();
-            return true;
-
-        }
-
-        return false;
-
-    }
-
-    function update_projection ( k, tx, ty ) {
-
-        if ( !arguments.length ) {
-            var t = d3.zoomTransform( _canvas );
-            return update_projection( t.k, t.x, t.y );
-        }
-
-        _projection_matrix
-            .ortho( 0, _width,  _height, 0, -10000, 10000 )
-            .translate( tx, ty, 0 )
-            .scale( k, -k, 1 )
-            .translate( 0, -_height, 0 );
-
-        for ( var i=0; i<_views.length; ++i ) {
-            _views[i].shader().set_projection( _projection_matrix );
-        }
-
-    }
-
-    function zoomed () {
-        var t = d3.event.transform;
-        update_projection( t.k, t.x, t.y );
-        _renderer.render();
-    }
-    
-}
-
-function web_gl_available ( canvas ) {
-
-    return !! ( window.WebGLRenderingContext && ( canvas.getContext( 'webgl' ) || canvas.getContext( 'experimental-webgl' ) ) );
-
-}
-
-function mesh () {
-
-    var _nodes = { array: [], map: d3.map() };
-    var _elements = { array: [], map: d3.map() };
-
-    var _nodal_values = d3.map();
-    var _elemental_values = d3.map();
-
-    var _subscribers = [];
-
-    var _bounding_box;
-
-    function _mesh () {}
-
-    _mesh.bounding_box = function () {
-        return _bounding_box;
-    };
-
-    _mesh.elemental_value = function ( value, array ) {
-        if ( arguments.length == 1 ) return _elemental_values.get( value );
-        if ( arguments.length == 2 ) _elemental_values.set( value, array );
-        _subscribers.forEach( function ( cb ) { cb( value ); } );
-    };
-
-    _mesh.elements = function (_) {
-        if ( !arguments.length ) return _elements;
-        if ( _.array && _.map ) {
-            _elements = _;
-        }
-        return _mesh;
-    };
-
-    _mesh.element_array = function ( _ ) {
-        if ( !arguments.length ) return _elements.array;
-        _elements.array = _;
-        return _mesh;
-    };
-
-    _mesh.element_index = function ( element_number ) {
-        return _elements.map.get( element_number );
-    };
-
-    _mesh.element_map = function ( _ ) {
-        if ( !arguments.length ) return _elements.map;
-        _elements.map = _;
-        return _mesh;
-    };
-
-    _mesh.nodal_value = function ( value, array ) {
-        if ( arguments.length == 1 ) return _nodal_values.get( value );
-        if ( arguments.length == 2 ) _nodal_values.set( value, array );
-        _subscribers.forEach( function ( cb ) { cb( value ); } );
-        return _mesh;
-    };
-
-    _mesh.nodes = function (_) {
-        if ( !arguments.length ) return _nodes;
-        if ( _.array && _.map ) {
-            _nodes = _;
-            _bounding_box = calculate_bbox( _nodes.array );
-        }
-        return _mesh;
-    };
-
-    _mesh.node_array = function ( _ ) {
-        if ( !arguments.length ) return _nodes.array;
-        _nodes.array = _;
-        calculate_bbox( _mesh.node_array() );
-        return _mesh;
-    };
-
-    _mesh.node_index = function ( node_number ) {
-        return _nodes.map.get( node_number );
-    };
-
-    _mesh.node_map = function ( _ ) {
-        if ( !arguments.length ) return _nodes.map;
-        _nodes.map = _;
-        return _mesh;
-    };
-
-    _mesh.num_elements = function () {
-        return _elements.array.length / 3;
-    };
-
-    _mesh.num_nodes = function () {
-        return _nodes.array.length / 3;
-    };
-
-    _mesh.subscribe = function ( callback ) {
-        _subscribers.push( callback );
-    };
-
-    return _mesh;
-
-}
-
-function calculate_bbox ( node_array ) {
-
-    var numnodes = node_array.length/3;
-    var minx = Infinity, maxx = -Infinity;
-    var miny = Infinity, maxy = -Infinity;
-    var minz = Infinity, maxz = -Infinity;
-    for ( var i=0; i<numnodes; ++i ) {
-        if ( node_array[3*i] < minx ) minx = node_array[3*i];
-        else if ( node_array[3*i] > maxx ) maxx = node_array[3*i];
-        if ( node_array[3*i+1] < miny ) miny = node_array[3*i+1];
-        else if ( node_array[3*i+1] > maxy ) maxy = node_array[3*i+1];
-        if ( node_array[3*i+2] < minz ) minz = node_array[3*i+2];
-        else if ( node_array[3*i+2] > maxz ) maxz = node_array[3*i+2];
-    }
-    return [[minx, miny, minz], [maxx, maxy, maxz]];
 
 }
 
@@ -3362,11 +3059,122 @@ function ui ( selection ) {
 
 }
 
+function mesh () {
+
+    var _mesh = dispatcher();
+
+    var _nodes = Object.create({
+        array: [],
+        map: d3.map(),
+        dimensions: 2
+    });
+    var _elements = Object.create({
+        array: [],
+        map: d3.map()
+    });
+
+    var _nodal_values = Object.create( null );
+    var _elemental_values = Object.create( null );
+
+    var _bounding_box;
+
+    _mesh.bounding_box = function () {
+
+        return _bounding_box;
+
+    };
+
+    _mesh.elemental_value = function ( value, array ) {
+
+        if ( arguments.length == 1 ) return _elemental_values[ value ];
+        if ( arguments.length == 2 && array.length == _elements.array.length / 3 ) {
+            _elemental_values[ value ] = array;
+            _mesh.dispatch( {
+                'type': 'elemental_value',
+                'name': value,
+                'array': array
+            } );
+        }
+        return _mesh;
+
+    };
+
+    _mesh.elements = function ( _ ) {
+
+        if ( !arguments.length ) return _elements;
+        if ( _.array && _.map ) _elements = _;
+        return _mesh;
+
+    };
+
+    _mesh.nodal_value = function ( value, array ) {
+
+        if ( arguments.length == 1 ) return _nodal_values[ value ];
+        if ( arguments.length == 2 && array.length == _nodes.array.length ) {
+            _nodal_values[ value ] = array;
+            _mesh.dispatch( {
+                'type': 'nodal_value',
+                'name': value,
+                'array': array
+            } );
+        }
+        return _mesh;
+
+    };
+
+    _mesh.nodes = function ( _ ) {
+
+        if ( !arguments.length ) return _nodes;
+        if ( _.array && _.map && _.dimensions ) {
+            _nodes = _;
+            _bounding_box = calculate_bounding_box( _nodes );
+        }
+        return _mesh;
+
+    };
+
+    _mesh.num_elements = function () {
+
+        return _elements.array.length / 3;
+
+    };
+
+    _mesh.num_nodes = function () {
+
+        return _nodes.array.length / _nodes.dimensions;
+
+    };
+
+    return _mesh;
+
+}
+
+function calculate_bounding_box ( nodes ) {
+
+    var array = nodes.array;
+    var dims = nodes.dimensions;
+    var numnodes = array.length / dims;
+    var mins = [], maxs = [];
+    for ( var i=0; i<dims; ++i ) {
+        mins.push( Infinity );
+        maxs.push( -Infinity );
+    }
+
+    for ( var node=0; node<numnodes; ++node ) {
+        for ( var dim=0; dim<dims; ++dim ) {
+            if ( array[ dims*node + dim ] < mins[ dim ] ) mins[ dim ] = array[ dims*node + dim ];
+            if ( array[ dims*node + dim ] > maxs[ dim ] ) maxs[ dim ] = array[ dims*node + dim ];
+        }
+    }
+
+    return [ mins, maxs ];
+
+}
+
 exports.fort14 = fort14;
 exports.fort63 = fort63;
 exports.fort64 = fort64;
 exports.gl_renderer = gl_renderer;
-exports.mesh = mesh;
 exports.geometry = geometry;
 exports.view = view;
 exports.basic_shader = basic_shader;
@@ -3375,6 +3183,7 @@ exports.cache = cache;
 exports.dispatcher = dispatcher;
 exports.slider = slider;
 exports.ui = ui;
+exports.mesh = mesh;
 
 Object.defineProperty(exports, '__esModule', { value: true });
 

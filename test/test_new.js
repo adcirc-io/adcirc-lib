@@ -1,6 +1,8 @@
 
 var canvas = d3.select( '#canvas' );
-var renderer = adcirc.gl_renderer()( canvas.node() );
+var renderer = adcirc
+    .gl_renderer( canvas )
+    .clear_color( 'darkgray' );
 
 var num_ts = 187;
 
@@ -225,24 +227,22 @@ function display_mesh () {
         return;
     }
 
-    var geometry = adcirc.geometry( renderer.gl_context() )
-        .nodal_value( 'depth' )
-        .elemental_value( 'residual' )
-        .mesh( mesh );
+    var geometry = adcirc
+        .geometry( renderer.gl_context(), mesh );
 
     shader = adcirc
         .gradient_shader( renderer.gl_context(), 3 )
-        .gradient_stops( [-0.015, 0.0, 0.01] )
+        .gradient_stops( [-0.03, 0.0, 0.02] )
         .gradient_colors([
             d3.color( 'steelblue' ),
             d3.color( 'lightgreen' ),
             d3.color( 'orangered' )
         ]);
 
-    var view = adcirc.view( renderer.gl_context() );
+    var view = adcirc.view( renderer.gl_context(), geometry, shader );
 
     renderer
-        .add_view( view( geometry, shader ) )
+        .add_view( view )
         .zoom_to( mesh, 500 );
 
 }
