@@ -764,7 +764,8 @@ function fort14 () {
                 _nodes = {
                     array: new Float32Array( message.node_array ),
                     map: nest( new Uint32Array( message.node_map ) ),
-                    dimensions: message.dimensions
+                    dimensions: message.dimensions,
+                    names: [ 'x', 'y', 'depth' ]
                 };
 
                 _fort14.dispatch( {
@@ -1784,12 +1785,42 @@ function geometry ( gl, mesh ) {
 
     };
 
+    _geometry.elemental_value = function ( value ) {
+
+        var data = _mesh.elemental_value( value );
+
+        if ( data ) {
+
+            set_elemental_value( data );
+
+            _geometry.dispatch({
+                type: 'update',
+                value: value
+            });
+
+        }
+
+    };
+
+    _geometry.nodal_value = function ( value ) {
+
+        var data = _mesh.nodal_value( value );
+
+        if ( data ) {
+
+            set_nodal_value( data );
+
+            _geometry.dispatch({
+                type: 'update',
+                value: value
+            });
+
+        }
+
+    };
+
 
     initialize( _mesh.nodes(), _mesh.elements() );
-
-    _mesh.on( 'elemental_value', on_elemental_value );
-    _mesh.on( 'nodal_value', on_nodal_value );
-
 
     return _geometry;
 
@@ -1862,54 +1893,44 @@ function geometry ( gl, mesh ) {
 
     }
 
-    function on_elemental_value ( event ) {
+    function set_elemental_value ( data ) {
 
-        var data = new Float32Array( 3 * _num_triangles );
+        var array = new Float32Array( 3 * _num_triangles );
 
         for ( var i=0; i<_num_triangles; ++i ) {
 
-            var value = event.array[i];
+            var value = data[i];
 
-            data[ 3 * i ] = value;
-            data[ 3 * i + 1 ] = value;
-            data[ 3 * i + 2 ] = value;
+            array[ 3 * i ] = value;
+            array[ 3 * i + 1 ] = value;
+            array[ 3 * i + 2 ] = value;
 
         }
 
         var buffer = _buffers.get( 'vertex_value' );
         _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
-
-        _geometry.dispatch({
-            type: 'update',
-            value: event.value
-        });
+        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, array );
 
     }
 
-    function on_nodal_value ( event ) {
+    function set_nodal_value ( data ) {
 
-        var data = new Float32Array( 3 * _num_triangles );
-        var nodes = _mesh.nodes();
-        var elements = _mesh.elements();
+        var array = new Float32Array( 3 * _num_triangles );
+        var node_map = _mesh.nodes().map;
+        var elements = _mesh.elements().array;
 
         for ( var i=0; i<3*_num_triangles; ++i ) {
 
-            var node_number = elements.array[ i ];
-            var node_index = nodes.map.get( node_number );
+            var node_number = elements[ i ];
+            var node_index = node_map.get( node_number );
 
-            data[ i ] = values[ node_index ];
+            array[ i ] = data[ node_index ];
 
         }
 
         var buffer = _buffers.get( 'vertex_value' );
         _gl.bindBuffer( _gl.ARRAY_BUFFER, buffer.buffer );
-        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, data );
-
-        _geometry.dispatch({
-            type: 'update',
-            value: event.value
-        });
+        _gl.bufferSubData( _gl.ARRAY_BUFFER, 0, array );
 
     }
 
@@ -1922,6 +1943,18 @@ function view ( gl, geometry, shader ) {
     var _shader = shader;
 
     var _view = dispatcher();
+
+    _view.elemental_value = function ( value ) {
+
+        _geometry.elemental_value( value );
+
+    };
+
+    _view.nodal_value = function ( value ) {
+
+        _geometry.nodal_value( value );
+
+    };
 
     _view.render = function () {
 
@@ -1937,7 +1970,7 @@ function view ( gl, geometry, shader ) {
                     attribute,
                     buffer.size,
                     buffer.type,
-                    buffer.normalize,
+                    buffer.normalized,
                     buffer.stride,
                     buffer.offset
                 );
@@ -2183,7 +2216,8 @@ function gradient_shader ( gl, num_colors, min, max ) {
     var max = max || 1;
     for ( var i=0; i<num_colors; ++i ) {
         _gradient_stops.push( min + ( max-min ) * i/(num_colors-1) );
-        _gradient_colors.push( d3.color( d3.schemeCategory20c[i%num_colors] ) );
+        _gradient_colors.push( d3.color( d3.schemeCategory20[i%num_colors] ) );
+        console.log( _gradient_colors[i] );
     }
 
     _gl.useProgram( _program );
@@ -3028,22 +3062,91 @@ function slider () {
 
 }
 
+function button () {
+
+    var _selection;
+    var _filepicker;
+    var _filepicker_cb;
+
+    function _button ( selection ) {
+
+        _selection = selection;
+        _button.file_picker( _filepicker_cb );
+        return _button;
+
+    }
+
+    _button.file_picker = function ( _ ) {
+
+        if ( !arguments.length ) return _filepicker;
+        if ( typeof _ !== 'function' ) return _button;
+
+        _filepicker_cb = _;
+
+        if ( !_filepicker && _selection ) {
+
+            _filepicker = _selection.append( 'input' )
+                .attr( 'type', 'file' )
+                .style( 'display', 'none' )
+                .on( 'click', function () {
+                    d3.event.stopPropagation();
+                })
+                .on( 'change', function () {
+                    if ( typeof _filepicker_cb === 'function' ) {
+                        _filepicker_cb( _filepicker.node().files[0] );
+                    }
+                });
+
+        }
+
+        if ( _selection ) {
+
+            _selection.on( 'click', function () {
+
+                d3.event.preventDefault();
+                _filepicker.node().click();
+
+            });
+
+        }
+
+        return _button;
+
+    };
+
+    return _button;
+
+}
+
 function ui ( selection ) {
 
     var _ui = Object.create( null );
 
-    selection.selectAll( '.slider' )
+    selection.selectAll( '.adc-slider' )
         .each( function () {
 
             var _slider = d3.select( this );
             var _id = _slider.attr( 'id' );
 
             if ( !_id || !!_ui[ _id ] ) {
-                console.error( 'All UI components must have a unique ID' );
-                return;
+                return unique_error();
             }
 
             _ui[ _id ] = slider()( column_container( _slider ) );
+
+        });
+
+    selection.selectAll( '.adc-button' )
+        .each( function () {
+
+            var _button = d3.select( this );
+            var _id = _button.attr( 'id' );
+
+            if ( !_id || !!_ui[ _id ] ) {
+                return unique_error();
+            }
+
+            _ui[ _id ] = button()( _button );
 
         });
 
@@ -3055,6 +3158,10 @@ function ui ( selection ) {
             .style( 'display', 'flex' )
             .style( 'flex-direction', 'column' );
 
+    }
+
+    function unique_error () {
+        console.error( 'All UI components must have a unique ID' );
     }
 
 }
@@ -3081,6 +3188,16 @@ function mesh () {
     _mesh.bounding_box = function () {
 
         return _bounding_box;
+
+    };
+
+    _mesh.bounds = function ( value ) {
+
+        var array = _mesh.nodal_value( value ) || _mesh.elemental_value( value );
+        if ( array ) return calculate_bounding_box({
+            array: array,
+            dimensions: 1
+        });
 
     };
 
@@ -3125,10 +3242,7 @@ function mesh () {
     _mesh.nodes = function ( _ ) {
 
         if ( !arguments.length ) return _nodes;
-        if ( _.array && _.map && _.dimensions ) {
-            _nodes = _;
-            _bounding_box = calculate_bounding_box( _nodes );
-        }
+        if ( _.array && _.map && _.dimensions ) store_nodes( _ );
         return _mesh;
 
     };
@@ -3146,6 +3260,47 @@ function mesh () {
     };
 
     return _mesh;
+
+
+    function store_nodes ( nodes ) {
+
+        var extra_dimensions = nodes.names ? Math.min( nodes.names.length, nodes.dimensions ) - 2 : 0;
+        var num_nodes = nodes.array.length / nodes.dimensions;
+        var arrays = [ new Float32Array( 2 * num_nodes ) ];
+
+        for ( var i=0; i<extra_dimensions; ++i ) {
+            arrays.push( new Float32Array( num_nodes ) );
+        }
+
+        for ( var node=0; node<num_nodes; ++node ) {
+
+            arrays[ 0 ][ 2 * node ] = nodes.array[ nodes.dimensions * node ];
+            arrays[ 0 ][ 2 * node + 1 ] = nodes.array[ nodes.dimensions * node + 1 ];
+
+            for ( var dimension = 0; dimension < extra_dimensions; ++dimension ) {
+
+                arrays[ 1 + dimension ][ node ] = nodes.array[ nodes.dimensions * node + 2 + dimension ];
+
+            }
+        }
+
+        _nodes = {
+            array: arrays[0],
+            map: nodes.map,
+            dimensions: 2,
+            names: ['x', 'y']
+        };
+
+        for ( var dimension = 0; dimension < extra_dimensions; ++dimension ) {
+
+            var name = nodes.names[ 2 + dimension ];
+            _nodal_values[ name ] = arrays[ 1 + dimension ];
+
+        }
+
+        _bounding_box = calculate_bounding_box( _nodes );
+
+    }
 
 }
 
@@ -3167,7 +3322,7 @@ function calculate_bounding_box ( nodes ) {
         }
     }
 
-    return [ mins, maxs ];
+    return dims == 1 ? [ mins[0], maxs[0] ] : [ mins, maxs ];
 
 }
 
@@ -3182,6 +3337,7 @@ exports.gradient_shader = gradient_shader;
 exports.cache = cache;
 exports.dispatcher = dispatcher;
 exports.slider = slider;
+exports.button = button;
 exports.ui = ui;
 exports.mesh = mesh;
 
