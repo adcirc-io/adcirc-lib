@@ -1579,6 +1579,7 @@ function gl_renderer ( selection ) {
 
     var _width = 0;
     var _height = 0;
+    var _offset_y;
     var _pixel_ratio = 1;
     var _clear_color = d3.color( 'white' );
 
@@ -1711,7 +1712,11 @@ function gl_renderer ( selection ) {
             _canvas.width = _width * _pixel_ratio;
             _canvas.height = _height * _pixel_ratio;
             _gl.viewport( 0, 0, _width, _height );
+
+            if ( !_offset_y || _offset_y < 0 ) _offset_y = _height;
+
             update_projection();
+
             return true;
 
         }
@@ -1731,10 +1736,10 @@ function gl_renderer ( selection ) {
             .ortho( 0, _width, _height, 0, -10000, 10000 )
             .translate( tx, ty, 0 )
             .scale( k, -k, 1 )
-            .translate( 0, -_height, 0 );
+            .translate( 0, -_offset_y, 0 );
 
         for ( var i=0; i<_views.length; ++i ) {
-            _views[i].shader().set_projection( _projection_matrix );
+            _views[i].shader().projection( _projection_matrix );
         }
 
     }
@@ -1947,12 +1952,14 @@ function view ( gl, geometry, shader ) {
     _view.elemental_value = function ( value ) {
 
         _geometry.elemental_value( value );
+        return _view;
 
     };
 
     _view.nodal_value = function ( value ) {
 
         _geometry.nodal_value( value );
+        return _view;
 
     };
 
@@ -1982,12 +1989,17 @@ function view ( gl, geometry, shader ) {
         } );
 
         _geometry.drawArrays();
+        return _view;
 
     };
 
-    _view.shader = function () {
+    _view.shader = function ( _ ) {
 
-        return _shader;
+        if ( !arguments.length ) return _shader;
+        _.projection( _shader.projection() );
+        _shader = _;
+        _view.dispatch( { type: 'update' } );
+        return _view;
 
     };
 
@@ -2208,6 +2220,7 @@ function gradient_shader ( gl, num_colors, min, max ) {
     var _program = gl_program( _gl, gradient_vertex( num_colors ), gradient_fragment() );
     var _gradient_colors = [];
     var _gradient_stops = [];
+    var _projection;
     var _wire_color = d3.color( 'black' );
     var _wire_alpha = 0.3;
     var _wire_width = 1.0;
@@ -2217,7 +2230,6 @@ function gradient_shader ( gl, num_colors, min, max ) {
     for ( var i=0; i<num_colors; ++i ) {
         _gradient_stops.push( min + ( max-min ) * i/(num_colors-1) );
         _gradient_colors.push( d3.color( d3.schemeCategory20[i%num_colors] ) );
-        console.log( _gradient_colors[i] );
     }
 
     _gl.useProgram( _program );
@@ -2266,7 +2278,9 @@ function gradient_shader ( gl, num_colors, min, max ) {
         return _program;
     };
 
-    _program.set_projection = function ( matrix ) {
+    _program.projection = function ( matrix ) {
+        if ( !arguments.length ) return _projection;
+        _projection = matrix;
         _gl.useProgram( _program );
         _gl.uniformMatrix4fv( _program.uniform( 'projection_matrix' ), false, matrix );
         return _program;
@@ -3227,7 +3241,7 @@ function mesh () {
     _mesh.nodal_value = function ( value, array ) {
 
         if ( arguments.length == 1 ) return _nodal_values[ value ];
-        if ( arguments.length == 2 && array.length == _nodes.array.length ) {
+        if ( arguments.length == 2 && array.length == _nodes.array.length / _nodes.dimensions ) {
             _nodal_values[ value ] = array;
             _mesh.dispatch( {
                 'type': 'nodal_value',
@@ -3294,7 +3308,7 @@ function mesh () {
         for ( var dimension = 0; dimension < extra_dimensions; ++dimension ) {
 
             var name = nodes.names[ 2 + dimension ];
-            _nodal_values[ name ] = arrays[ 1 + dimension ];
+            _mesh.nodal_value( name, arrays[ 1 + dimension ] );
 
         }
 
@@ -3317,8 +3331,10 @@ function calculate_bounding_box ( nodes ) {
 
     for ( var node=0; node<numnodes; ++node ) {
         for ( var dim=0; dim<dims; ++dim ) {
-            if ( array[ dims*node + dim ] < mins[ dim ] ) mins[ dim ] = array[ dims*node + dim ];
-            if ( array[ dims*node + dim ] > maxs[ dim ] ) maxs[ dim ] = array[ dims*node + dim ];
+            if ( array[ dims * node + dim ] !== -99999 ) {
+                if ( array[ dims * node + dim ] < mins[ dim ] ) mins[ dim ] = array[ dims * node + dim ];
+                if ( array[ dims * node + dim ] > maxs[ dim ] ) maxs[ dim ] = array[ dims * node + dim ];
+            }
         }
     }
 
