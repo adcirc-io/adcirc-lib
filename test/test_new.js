@@ -4,7 +4,7 @@ var renderer = adcirc
     .gl_renderer( canvas )
     .clear_color( 'darkgray' );
 
-var num_ts = 187;
+var num_ts = 517;
 
 var progress = progress_bar().height( 2 );
 var slide = slider().count( num_ts );
@@ -21,6 +21,7 @@ f64_picker( d3.select( '#f64' ) );
 residual_picker( d3.select( '#residual' ) );
 
 var mesh = adcirc.mesh();
+var view;
 var shader;
 
 function on_f14 ( file ) {
@@ -130,13 +131,16 @@ function on_residual ( file ) {
         .on( 'start', progress.event )
         .on( 'progress', progress.event )
         .on( 'finish', progress.event )
+        .on( 'finish', console.log )
         .on( 'ready', function () {
-            cache_left.range( [0, 20] );
-            cache_right.range( [20, 187] );
-        });
+            cache_left.range( [0, 50] );
+            cache_right.range( [50, 100] );
+        })
+        .on( 'info', console.log )
+        .on( 'error', console.log );
 
     var cache_left = adcirc.cache()
-        .size( 20 )
+        .size( 50 )
         .max_size( num_ts )
         .getter( getter )
         .once( 'ready', function () {
@@ -145,7 +149,7 @@ function on_residual ( file ) {
         });
 
     var cache_right = adcirc.cache()
-        .size( 167 )
+        .size( 50 )
         .max_size( num_ts )
         .getter( getter )
         .once( 'ready', function () {
@@ -161,6 +165,7 @@ function on_residual ( file ) {
 
             console.log( data.index(), data.model_time(), data.model_timestep() );
             mesh.elemental_value( 'residual', data.data() );
+            view.elemental_value( 'residual' );
             // var r = data.data_range()[0];
             // var range = [ [r[0]/2, r[1]/2] ];
             // set_range( range );
@@ -232,14 +237,15 @@ function display_mesh () {
 
     shader = adcirc
         .gradient_shader( renderer.gl_context(), 3 )
-        .gradient_stops( [-0.03, 0.0, 0.02] )
+        .gradient_stops( [-.05, 0.0, .05] )
         .gradient_colors([
             d3.color( 'steelblue' ),
             d3.color( 'lightgreen' ),
             d3.color( 'orangered' )
         ]);
 
-    var view = adcirc.view( renderer.gl_context(), geometry, shader );
+    view = adcirc.view( renderer.gl_context(), geometry, shader );
+    view.nodal_value( 'depth' );
 
     renderer
         .add_view( view )
