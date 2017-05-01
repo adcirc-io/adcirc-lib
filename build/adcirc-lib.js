@@ -210,7 +210,7 @@ function build_fort14_worker () {
 
                 file_size = message.file.size;
 
-                post_start();
+                post_start( 'load_mesh' );
 
                 reader = file_reader( message.file )
                     .block_callback( parse_data )
@@ -261,7 +261,7 @@ function build_fort14_worker () {
     function done () {
 
         parse_data( '\n' );
-        post_finish();
+        post_finish( 'load_mesh' );
         check_queues();
 
     }
@@ -301,7 +301,7 @@ function build_fort14_worker () {
             // Progress stuff
             if ( 100 * ( file_loc + match.index ) / file_size > next_progress ) {
 
-                post_progress( next_progress );
+                post_progress( next_progress, 'load_mesh' );
                 next_progress += progress_interval;
 
             }
@@ -473,23 +473,38 @@ function build_fort14_worker () {
 
     }
 
-    function post_start () {
-        self.postMessage({
+    function post_start ( task ) {
+
+        var message = {
             type: 'start'
-        });
+        };
+
+        if ( task ) message.task = task;
+
+        self.postMessage( message );
     }
 
-    function post_progress ( progress ) {
-        self.postMessage({
+    function post_progress ( progress, task ) {
+
+        var message = {
             type: 'progress',
             progress: progress
-        });
+        };
+
+        if ( task ) message.task = task;
+
+        self.postMessage( message );
     }
 
-    function post_finish () {
-        self.postMessage({
+    function post_finish ( task ) {
+
+        var message = {
             type: 'finish'
-        });
+        };
+
+        if ( task ) message.task = task;
+
+        self.postMessage( message );
     }
 
     function post_elements () {
@@ -732,22 +747,19 @@ function fort14 () {
 
             case 'start':
 
-                _fort14.dispatch( { type: 'start' } );
+                _fort14.dispatch( message );
 
                 break;
 
             case 'progress':
 
-                _fort14.dispatch( {
-                    type: 'progress',
-                    progress: message.progress
-                } );
+                _fort14.dispatch( message );
 
                 break;
 
             case 'finish':
 
-                _fort14.dispatch( { type: 'finish' } );
+                _fort14.dispatch( message );
 
                 _worker.postMessage({
                     type: 'get',
@@ -828,6 +840,10 @@ function build_fortnd_worker () {
         final_check: false
     };
 
+    var nodal_timeseries = { seconds: [], timestep: [] };
+    var mints = [];
+    var maxts = [];
+
     self.addEventListener( 'message', function ( message ) {
 
         message = message.data;
@@ -838,12 +854,21 @@ function build_fortnd_worker () {
 
                 file = message.file;
                 num_dims = message.n_dims;
+
+                enqueue( { type: 'prep_timeseries' } );
+
                 read_header();
+                break;
+
+            case 'timeseries':
+
+                enqueue( { type: 'timeseries', node_number: message.node_number } );
+                if ( mapping.finished && !dequeueing ) check_queue();
                 break;
 
             case 'timestep':
 
-                enqueue( message.index );
+                enqueue( { type: 'timestep', index: message.index } );
                 if ( mapping.finished && !dequeueing ) check_queue();
                 break;
 
@@ -853,21 +878,39 @@ function build_fortnd_worker () {
 
     function check_queue () {
 
-        var index;
+        var task;
         var wait = wait_queue;
         wait_queue = [];
         while ( wait.length > 0 ) {
 
-            index = wait.shift();
-            enqueue( index );
+            task = wait.shift();
+            enqueue( task );
 
         }
 
-        index = process_queue.shift();
-        if ( index !== undefined ) {
+        task = process_queue.shift();
+
+        if ( task !== undefined ) {
 
             dequeueing = true;
-            load_timestep( index );
+
+            if ( task.type === 'timestep' ) {
+
+                load_timestep( task.index );
+
+            }
+
+            else if ( task.type === 'timeseries' ) {
+
+                load_timeseries( task.node_number );
+
+            }
+
+            else if ( task.type === 'prep_timeseries' ) {
+
+                load_all_timeseries();
+
+            }
 
         } else {
 
@@ -883,17 +926,120 @@ function build_fortnd_worker () {
 
     }
 
-    function enqueue ( index ) {
+    function enqueue ( task ) {
 
-        if ( index < timesteps.length ) {
+        if ( task.type === 'timestep' ) {
 
-            process_queue.push( index );
+            if ( task.index < timesteps.length ) {
 
-        } else {
+                process_queue.push( task );
 
-            wait_queue.push( index );
+            } else {
+
+                wait_queue.push( task );
+
+            }
 
         }
+
+        else if ( task.type === 'timeseries' || task.type === 'prep_timeseries' ) {
+
+            if ( mapping.finished ) {
+
+                process_queue.push( task );
+
+            } else {
+
+                wait_queue.push( task );
+
+            }
+
+        }
+
+    }
+
+    function load_all_timeseries () {
+
+        post_start( 'timeseries_prep' );
+
+        var newline_regex = /\r?\n/g;
+        var nonwhite_regex = /\S+/g;
+
+        var reader = new FileReaderSync();
+        var data = reader.readAsText( file );
+        var lines = data.split( newline_regex );
+
+        // Get info about the data
+        var infoline = lines[1].match( nonwhite_regex );
+        var num_nodes = parseInt( infoline[1] );
+        var num_ts = parseInt( infoline[0] );
+
+        // Create empty lists
+        for ( var node=0; node<num_nodes; ++node ) {
+
+            nodal_timeseries[ (node+1).toString() ] = [];
+
+        }
+
+        // Read data
+        for ( var ts=0; ts<num_ts; ++ts ) {
+
+            var start_line = 2 + ts * ( num_nodes + 1 );
+            var start_line_dat = lines[ start_line ].match( nonwhite_regex );
+
+            nodal_timeseries.seconds.push( parseFloat( start_line_dat[ 0 ] ) );
+            nodal_timeseries.timestep.push( parseInt( start_line_dat[ 1 ] ) );
+
+            var currmin = Infinity;
+            var currmax = -Infinity;
+
+            post_progress( 100 * ts / num_datasets, 'timeseries_prep' );
+
+            for ( node = 1; node < num_nodes + 1; ++node ) {
+
+                var dat = parseFloat( lines[ start_line + node ].match( nonwhite_regex )[ 1 ] );
+                if ( dat != -99999 ) {
+
+                    if ( dat > currmax ) currmax = dat;
+                    if ( dat < currmin ) currmin = dat;
+
+                }
+
+                nodal_timeseries[ node.toString() ].push( dat );
+
+            }
+
+            if ( currmax != Infinity ) {
+                maxts.push( currmax );
+            } else {
+                maxts.push( null );
+            }
+
+            if ( currmin != Infinity ) {
+                mints.push( currmin );
+            } else {
+                mints.push( null );
+            }
+
+        }
+
+        post_finish( 'timeseries_prep' );
+
+        check_queue();
+
+    }
+
+    function load_timeseries ( node_number ) {
+
+        var timeseries = {
+            array: new Float32Array( nodal_timeseries[ node_number ] ),
+            node_number: node_number,
+            min: [ mints[ node_number-1 ] ],
+            max: [ maxts[ node_number-1 ] ]
+        };
+
+        post_timeseries( timeseries );
+        check_queue();
 
     }
 
@@ -1027,7 +1173,7 @@ function build_fortnd_worker () {
                     mapping.header = match[ 0 ];
 
                     timesteps[ mapping.ts_index++ ] = mapping.location;
-                    post_progress( 100 * ( mapping.ts_index / num_datasets ) );
+                    post_progress( 100 * ( mapping.ts_index / num_datasets ), 'map_timesteps' );
 
 
                 } else {
@@ -1054,7 +1200,7 @@ function build_fortnd_worker () {
             } else {
 
                 mapping.finished = true;
-                post_finish();
+                post_finish( 'map_timesteps' );
 
                 if ( !mapping.final_check ) {
 
@@ -1082,11 +1228,15 @@ function build_fortnd_worker () {
 
     }
 
-    function post_finish () {
+    function post_finish ( task ) {
 
-        self.postMessage({
+        var message = {
             type: 'finish'
-        });
+        };
+
+        if ( task ) message.task = task;
+
+        self.postMessage( message );
 
     }
 
@@ -1104,20 +1254,50 @@ function build_fortnd_worker () {
 
     }
 
-    function post_progress ( percent ) {
+    function post_progress ( percent, task ) {
 
-        self.postMessage({
+        var event = {
             type: 'progress',
             progress: percent
-        });
+        };
+
+        if ( task ) event.task = task;
+
+        self.postMessage( event );
 
     }
 
-    function post_start () {
+    function post_start ( task ) {
 
-        self.postMessage({
+        var message = {
             type: 'start'
-        });
+        };
+
+        if ( task ) message.task = task;
+
+        self.postMessage( message );
+
+    }
+
+    function post_timeseries ( timeseries ) {
+
+        var ranges = [];
+        for ( var i=0; i<num_dims; ++i ) {
+            ranges.push( [ timeseries.min[i], timeseries.max[i] ] );
+        }
+
+        var message = {
+            type: 'timeseries',
+            data_range: ranges,
+            dimensions: num_dims,
+            node_number: timeseries.node_number,
+            array: timeseries.array.buffer
+        };
+
+        self.postMessage(
+            message,
+            [ message.array ]
+        );
 
     }
 
@@ -1135,6 +1315,7 @@ function build_fortnd_worker () {
             index: timestep.index,
             model_time: timestep.model_time,
             model_timestep: timestep.timestep,
+            num_datasets: num_datasets,
             array: timestep.array.buffer
         };
 
@@ -1168,6 +1349,7 @@ function timestep ( message ) {
     var _index;
     var _model_time;
     var _model_timestep;
+    var _num_datasets;
 
     if ( message.hasOwnProperty( 'data_range' ) && message.hasOwnProperty( 'dimensions' ) &&
          message.hasOwnProperty( 'model_time' ) && message.hasOwnProperty( 'model_timestep' ) &&
@@ -1180,6 +1362,7 @@ function timestep ( message ) {
             _index = message.index;
             _model_time = message.model_time;
             _model_timestep = message.model_timestep;
+            _num_datasets = message.num_datasets;
             _array = new Float32Array( message.array );
 
         } catch ( e ) {
@@ -1230,6 +1413,12 @@ function timestep ( message ) {
         return _timestep;
     };
 
+    _timestep.num_datasets = function ( _ ) {
+        if ( !arguments.length ) return _num_datasets;
+        _num_datasets = _;
+        return _timestep;
+    };
+
     return _timestep;
 
 }
@@ -1246,6 +1435,25 @@ function fortnd ( n_dims ) {
     var _n_dims = n_dims;
     var _worker = fortnd_worker();
     var _fortnd = dispatcher();
+
+    _fortnd.timeseries = function ( node_number, callback ) {
+
+        if ( typeof callback === 'function' ) {
+
+            _fortnd.once( 'timeseries' + node_number, function ( event ) {
+
+                callback( event );
+
+            });
+
+        }
+
+        _worker.postMessage({
+            type: 'timeseries',
+            node_number: node_number
+        });
+
+    };
 
     // Kick off the loading of a specific timestep. Optionally
     // pass in a callback that will be called only once when
@@ -1313,22 +1521,19 @@ function fortnd ( n_dims ) {
 
             case 'start':
 
-                _fortnd.dispatch( { type: 'start' } );
+                _fortnd.dispatch( message );
 
                 break;
 
             case 'progress':
 
-                _fortnd.dispatch( {
-                    type: 'progress',
-                    progress: message.progress
-                } );
+                _fortnd.dispatch( message );
 
                 break;
 
             case 'finish':
 
-                _fortnd.dispatch( { type: 'finish' } );
+                _fortnd.dispatch( message );
                 _fortnd.dispatch( { type: 'ready' } );
 
                 break;
@@ -1336,6 +1541,34 @@ function fortnd ( n_dims ) {
             case 'error':
 
                 _fortnd.dispatch( { type: 'error', error: message.error } );
+                break;
+
+            case 'timeseries':
+
+                var _node_number = message.node_number;
+
+                var timeseries = {
+                    array: new Float32Array( message.array ),
+                    data_range: message.data_range,
+                    dimensions: message.dimensions,
+                    node_number: message.node_number
+                };
+
+                _fortnd.dispatch({
+                    type: 'timeseries' + _node_number,
+                    timeseries: timeseries
+                });
+
+                _fortnd.dispatch({
+                    type: 'timeseries',
+                    timeseries: timeseries
+                });
+
+                break;
+
+            case 'timeseries_ready':
+
+                _fortnd.dispatch( message );
                 break;
 
             case 'timestep':
@@ -1887,6 +2120,12 @@ function fortnd_cached ( n_dims, size ) {
 
     };
 
+    _fortnd.timeseries = function ( node_number, callback ) {
+
+        return _file.timeseries( node_number, callback );
+
+    };
+
     _fortnd.timestep = function ( index ) {
 
         return _gl_cache.get( index );
@@ -1925,9 +2164,10 @@ function fortnd_cached ( n_dims, size ) {
         _left_cache
             .once( 'ready', function () {
                 _gl_cache
-                    .once( 'ready', function () {
+                    .once( 'ready', function ( event ) {
 
                         get_timestep( 0 );
+                        _fortnd.dispatch( event );
 
                     })
                     .max_size( event.num_datasets )
@@ -2157,8 +2397,12 @@ function gl_renderer ( selection ) {
     var _clear_color = d3.color( 'white' );
 
     var _projection_matrix = m4();
-    var _zoom = d3.zoom().on( 'zoom', zoomed );
-    _selection.call( _zoom );
+    var _zoom = d3.zoom()
+        .on( 'zoom', zoomed );
+    _selection
+        .call( _zoom )
+        .on( 'mousemove', on_hover )
+        .on( 'click', on_click );
 
     var _needs_render = true;
     var _views = [];
@@ -2208,6 +2452,15 @@ function gl_renderer ( selection ) {
 
     };
 
+    _renderer.set_view = function ( view ) {
+
+        view.on( 'update', _renderer.render );
+        _views = [ view ];
+        update_projection();
+        return _renderer;
+
+    };
+
     _renderer.zoom_to = function ( _ ) {
 
         if ( !arguments.length ) return _renderer;
@@ -2238,20 +2491,13 @@ function gl_renderer ( selection ) {
 
     };
 
-    _canvas.addEventListener( 'webglcontextlost', bubble_event );
-    _canvas.addEventListener( 'webglcontextrestored', bubble_event );
-    _canvas.addEventListener( 'webglcontextcreationerror', bubble_event );
+    _canvas.addEventListener( 'webglcontextlost', _renderer.dispatch );
+    _canvas.addEventListener( 'webglcontextrestored', _renderer.dispatch );
+    _canvas.addEventListener( 'webglcontextcreationerror', _renderer.dispatch );
 
     check_render();
 
     return _renderer;
-
-
-    function bubble_event ( event ) {
-
-        _renderer.dispatch( event );
-
-    }
 
     function check_render () {
 
@@ -2265,6 +2511,37 @@ function gl_renderer ( selection ) {
         requestAnimationFrame( check_render );
 
     }
+
+    function on_click () {
+
+        var mouse = d3.mouse( this );
+        var transform = d3.zoomTransform( _canvas );
+        var pos = transform.invert( mouse );
+        pos[1] = _offset_y - pos[1];
+
+        _renderer.dispatch({
+            type: 'click',
+            coordinates: pos,
+            mouse: mouse,
+            transform: transform,
+            offset_y: _offset_y
+        });
+
+    }
+
+    function on_hover () {
+
+        var mouse = d3.mouse( this );
+        var pos = d3.zoomTransform( _canvas ).invert( [mouse[0], mouse[1] ] );
+        pos[1] = _offset_y - pos[1];
+
+        _renderer.dispatch({
+            type: 'hover',
+            coordinates: pos
+        });
+
+    }
+
 
     function render () {
 
@@ -2315,6 +2592,11 @@ function gl_renderer ( selection ) {
             _views[i].shader().projection( _projection_matrix );
         }
 
+        _renderer.dispatch({
+            type: 'projection',
+            transform: d3.zoomTransform( _canvas )
+        });
+
     }
 
     function zoomed () {
@@ -2360,7 +2642,6 @@ function geometry ( gl, mesh ) {
         var maxx = bbox[1][0];
         var maxy = bbox[1][1];
         return [ [_multiplier*minx, _multiplier*miny], [_multiplier*maxx, _multiplier*maxy] ];
-        // return _mesh.bounding_box();
 
     };
 
@@ -2418,8 +2699,6 @@ function geometry ( gl, mesh ) {
         //     _multiplier *= 2;
         //     min_dim *= _multiplier;
         // }
-
-        console.log( _multiplier, min_dim );
 
         _num_vertices = elements.array.length;
         _num_triangles = elements.array.length / 3;
@@ -2867,6 +3146,7 @@ function gradient_shader ( gl, num_colors, min, max ) {
 
     _program.gradient_stops = function ( _ ) {
         if ( !arguments.length ) return _gradient_stops;
+        if ( _.length == 2 && num_colors !== 2 ) _ = interpolate_stops( _[0], _[1], num_colors );
         _gradient_stops = _;
         _gl.useProgram( _program );
         _gl.uniform1fv( _program.uniform( 'gradient_stops' ), _gradient_stops );
@@ -2924,6 +3204,18 @@ function gradient_shader ( gl, num_colors, min, max ) {
         .wire_alpha( _program.wire_alpha() )
         .wire_color( _program.wire_color() )
         .wire_width( _program.wire_width() );
+
+    function interpolate_stops ( min, max, num_stops ) {
+
+        var stops = [];
+
+        for ( var i=0; i<num_stops; ++i ) {
+            stops.push( min + ( max-min ) * i/(num_stops-1) );
+        }
+
+        return stops;
+
+    }
 
 }
 
@@ -2999,9 +3291,11 @@ function slider () {
     var _drag_slider = d3.drag().on( 'start', clicked ).on( 'drag', dragged );
     var _draggable = true;
     var _jumpable = true;
+    var _request = false;
 
     var _continuous = false;
     var _step = 1;
+    var _domain = [0, 100];
     var _value_to_value = d3.scaleQuantize();
     var _value_to_percent = d3.scaleLinear().range( [0, 100] ).clamp( true );
     var _pixel_to_value = d3.scaleLinear();
@@ -3049,7 +3343,7 @@ function slider () {
         _slider.arrows( _arrows );
         _slider.bar( _bar_color );
         _slider.color( _color );
-        _slider.domain( [0,100] );
+        _slider.domain( _domain );
         _slider.draggable( _draggable );
         _slider.height( _height );
         _slider.jumpable( _jumpable );
@@ -3115,6 +3409,7 @@ function slider () {
     _slider.domain = function ( _ ) {
         if ( !arguments.length ) return _value_to_percent.domain();
 
+        _domain = _;
         var _range = [];
         _step = arguments.length == 2 ? arguments[1] : 1;
         for ( var i=_[0]; i<=_[1]; i+=_step ) _range.push( i );
@@ -3154,6 +3449,18 @@ function slider () {
         return _slider;
     };
 
+    _slider.needs_request = function ( _ ) {
+        if ( !arguments.length ) return _request;
+        _request = !!_;
+        return _slider;
+    };
+
+    _slider.set = function ( value ) {
+
+        set_current( value );
+
+    };
+
     return dispatcher( _slider );
 
     function clamp ( value ) {
@@ -3184,6 +3491,23 @@ function slider () {
 
     }
 
+    function dispatch_request ( value ) {
+
+        var request_value = _current;
+        if ( value > _current ) request_value += _step;
+        if ( value < _current ) request_value -= _step;
+
+        if ( request_value !== _current ) {
+
+            _slider.dispatch( {
+                type: 'request',
+                value: request_value
+            } );
+
+        }
+
+    }
+
     function dragged () {
 
         if ( _draggable ) {
@@ -3191,7 +3515,8 @@ function slider () {
             if ( pixel < 0 ) pixel = 0;
             if ( pixel > _width ) pixel = _width;
             var value = _pixel_to_value( pixel );
-            if ( set_current( value ) ) dispatch_current();
+            if ( _request ) dispatch_request( value );
+            else if ( set_current( value ) ) dispatch_current();
         }
 
     }
@@ -3301,6 +3626,10 @@ function progress () {
             .style( 'position', 'relative' )
             .style( 'width', '100%' )
             .style( 'user-select', 'none' );
+            // .style( 'display', 'flex' )
+            // .style( 'justify-content', 'center' )
+            // .style( 'align-items', 'center' )
+            // .style( 'font-size', '14px' );
 
         _bar = _selection
             .selectAll( 'div' )
@@ -3369,6 +3698,221 @@ function progress () {
 
 }
 
+function vertical_gradient () {
+
+    var _selection;
+    var _bar;
+    var _track;
+    var _sliders;
+
+    var _bar_width = 50;
+    var _track_width = 75;
+    var _height = 250;
+
+    var _stops = [
+        { stop: 0, color: 'lightsteelblue' },
+        { stop: 1, color: 'steelblue' }
+    ];
+
+    var _percent_to_value = d3.scaleLinear().domain( [ 0, 1 ] ).range( [ 0, 1 ] );
+    var _percent_to_pixel = d3.scaleLinear().domain( [ 0, 1 ] ).range( [ _height, 0 ] );
+
+
+    function _gradient ( selection ) {
+
+        // Keep track of selection that will be the gradient
+        _selection = selection;
+
+        // Apply the layout
+        layout( _selection );
+
+        // Return the gradient
+        return _gradient;
+
+    }
+
+    _gradient.stops = function ( stops, colors ) {
+
+        var extent = d3.extent( stops );
+
+        _percent_to_value.range( extent );
+
+        _stops = [];
+
+        for ( var i=0; i<stops.length; ++i ) {
+
+            _stops.push( { stop: _percent_to_value.invert( stops[i] ), color: colors[i] } );
+
+        }
+
+        _stops = _stops.sort( sort );
+
+        layout( _selection );
+
+        return _gradient;
+
+    };
+
+    function build_css_gradient ( stops ) {
+
+        var css = 'linear-gradient( 0deg, ';
+
+        for ( var i=0; i<stops.length; ++i  ){
+
+            var color = stops[i].color;
+            var percent = 100 * stops[i].stop;
+            css += color + ' ' + percent + '%';
+
+            if ( i < stops.length-1 ) css += ',';
+
+        }
+
+        return css + ')';
+
+    }
+
+    function dragged ( d ) {
+
+        var y = Math.max( 0, Math.min( _height, d3.event.y ) );
+
+        d3.select( this )
+            .style( 'top', y + 'px' );
+
+        d.stop = _percent_to_pixel.invert( y );
+
+        var sorted = _stops.sort( sort );
+
+        _bar.style( 'background', build_css_gradient( sorted ) );
+        _sliders.each( slider_text );
+
+        _gradient.dispatch({
+            type: 'gradient',
+            stops: sorted.map( function ( stop ) { return _percent_to_value( stop.stop ); } ),
+            colors: sorted.map( function ( stop ) { return stop.color; } )
+        });
+
+    }
+
+    function layout ( selection ) {
+
+        selection
+            .style( 'position', 'relative' )
+            .style( 'width', ( _bar_width + _track_width ) + 'px' )
+            .style( 'user-select', 'none' )
+            .style( 'min-height', _height + 'px' );
+
+        _bar = selection
+            .selectAll( '.gradient-bar' )
+            .data( [ {} ] );
+
+        _bar.exit().remove();
+
+        _bar = _bar.enter()
+            .append( 'div' )
+            .attr( 'class', 'gradient-bar' )
+            .merge( _bar );
+
+        _bar.style( 'position', 'absolute' )
+            .style( 'top', 0 )
+            .style( 'left', 0 )
+            .style( 'width', _bar_width + 'px' )
+            .style( 'height', '100%' )
+            .style( 'background', build_css_gradient( _stops ) )
+            .style( 'user-select', 'none' );
+
+        _track = selection
+            .selectAll( '.gradient-track' )
+            .data( [ {} ] );
+
+        _track.exit().remove();
+
+        _track = _track.enter()
+            .append( 'div' )
+            .attr( 'class', 'gradient-track' )
+            .merge( _track );
+
+        _track.style( 'position', 'absolute' )
+            .style( 'top', 0 )
+            .style( 'left', _bar_width + 'px' )
+            .style( 'width', _track_width + 'px' )
+            .style( 'height', '100%' )
+            .style( 'user-select', 'none' );
+
+        position_sliders();
+
+    }
+
+    function position_sliders () {
+
+        _sliders = _track.selectAll( '.slider' )
+            .data( _stops );
+
+        _sliders.exit().remove();
+
+        _sliders = _sliders.enter()
+            .append( 'div' )
+            .attr( 'class', 'slider' )
+            .merge( _sliders );
+
+        _sliders
+            .style( 'width', '0px' )
+            .style( 'height', '1px' )
+            .style( 'border-width', '8px' )
+            .style( 'border-style', 'solid' )
+            .style( 'margin-top', '-8px' )
+            .style( 'margin-left', '-8px')
+            .style( 'position', 'absolute' )
+            .style( 'left', 0 )
+            .each( function ( d ) {
+
+                d3.select( this )
+                    .style( 'top', ( _height - d.stop * _height ) + 'px' )
+                    .style( 'border-color', 'transparent ' + d.color + ' transparent transparent' )
+                    .style( 'user-select', 'none' );
+
+            })
+            .each( slider_text )
+            .call( d3.drag()
+                .on( 'drag', dragged )
+            );
+
+    }
+
+    function sort ( a, b ) {
+
+        return a.stop > b.stop;
+
+    }
+
+    function slider_text ( d ) {
+
+        var text = d3.select( this )
+            .selectAll( 'div' ).data( [ {} ] );
+
+        text.exit().remove();
+
+        text = text.enter()
+            .append( 'div' )
+            .merge( text );
+
+        text.style( 'position', 'absolute' )
+            .style( 'top', '50%' )
+            .style( 'left', '8px' )
+            .style( 'transform', 'translateY(-50%)' )
+            .style( 'padding-left', '4px' )
+            .style( 'font-size', '13px' )
+            .style( 'font-family', 'serif' )
+            .style( 'min-width', ( _track_width - 12 ) + 'px' )
+            .style( 'user-select', 'none' )
+            .style( 'cursor', 'default' )
+            .text( _percent_to_value( d.stop ).toFixed( 5 ) );
+
+    }
+
+    return dispatcher( _gradient );
+
+}
+
 function ui ( selection ) {
 
     var _ui = Object.create( null );
@@ -3412,6 +3956,20 @@ function ui ( selection ) {
             }
 
             _ui[ _id ] = progress()( _progress );
+
+        });
+
+    selection.selectAll( '.adc-gradient' )
+        .each( function () {
+
+            var _gradient = d3.select( this );
+            var _id = _gradient.attr( 'id' );
+
+            if ( exists( _id ) ) {
+                return unique_error();
+            }
+
+            _ui[ _id ] = vertical_gradient()( _gradient );
 
         });
 
@@ -3504,6 +4062,39 @@ function mesh () {
         } );
 
         return _mesh;
+
+    };
+
+    _mesh.find_node = function ( coordinates ) {
+
+        var num_nodes = _nodes.array.length / 2;
+        var closest = {
+            node_number: null,
+            distance: Infinity
+        };
+        var min_distance = Infinity;
+
+        for ( var x, y, d, i = 0; i < num_nodes; ++i ) {
+
+            x = _nodes.array[ 2 * i ];
+            y = _nodes.array[ 2 * i + 1 ];
+            d = distance( x, y );
+
+            if ( d < closest.distance ) {
+                closest.distance = d;
+                closest.node_number = i + 1;
+                closest.coordinates = [ x, y ];
+            }
+
+        }
+
+        return closest;
+
+        function distance ( x, y ) {
+
+            return ( x - coordinates[0] )*( x - coordinates[0] ) + ( y - coordinates[1] )*( y - coordinates[1] );
+
+        }
 
     };
 
@@ -3696,6 +4287,7 @@ exports.dispatcher = dispatcher;
 exports.slider = slider;
 exports.button = button;
 exports.progress = progress;
+exports.gradient = vertical_gradient;
 exports.ui = ui;
 exports.mesh_view = mesh_view;
 exports.mesh = mesh;
