@@ -28,5 +28,13 @@
     "rollup-watch": "^3.2.2",
     "tape": "^4.6.3",
     "uglify-js": "^2.8.11"
+  },
+  "dependencies": {
+    "adcirc-cache": "^1.0.1",
+    "adcirc-events": "^1.0.10",
+    "adcirc-io": "^0.2.2",
+    "adcirc-mesh": "^0.1.0",
+    "adcirc-render": "0.0.3",
+    "adcirc-ui": "^0.1.0"
   }
 }
